@@ -140,6 +140,11 @@ An item is considered erased when its data CRC field is 0.
 
 The length is a u16, so any item cannot be longer than 0xFFFF or `page size - the item header (padded to word boundary) - page state (2 words)`.
 
+The optional `tombstone` feature changes the on-flash item format by reserving one additional full flash word per item.
+That word is left erased when the item is written and is later written as a tombstone when the item is removed.
+This allows queue `pop` and map removal APIs to work with plain `NorFlash` instead of `MultiwriteNorFlash`, at the cost of the extra word of overhead per item.
+Flash contents written with and without `tombstone` are not compatible.
+
 ### Inner workings for map
 
 The map stores every key-value as an item. Every new value is appended at the last partial open page

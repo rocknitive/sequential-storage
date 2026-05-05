@@ -29,10 +29,10 @@
 //! critical-section mutex so it can be enqueued to from an interrupt handler, and signals
 //! a drain task the moment data arrives.
 
-use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
+use embedded_storage_async::nor_flash::NorFlash;
 
 use super::QueueStorage;
-use crate::{Error, cache::CacheImpl};
+use crate::{DeletionNorFlash, Error, cache::CacheImpl};
 
 // ── RamRing ──────────────────────────────────────────────────────────────────
 
@@ -280,7 +280,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
     where
-        S: MultiwriteNorFlash,
+        S: DeletionNorFlash,
     {
         // Reborrow so we can reuse data_buffer if flash returns None.
         let flash_len = self.storage.pop(&mut *data_buffer).await?.map(|s| s.len());
@@ -302,10 +302,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     pub async fn peek<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
-    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
-    where
-        S: MultiwriteNorFlash,
-    {
+    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
         // Reborrow so we can reuse data_buffer if flash returns None.
         let flash_len = self.storage.peek(&mut *data_buffer).await?.map(|s| s.len());
         if let Some(len) = flash_len {
@@ -483,7 +480,7 @@ impl<const N: usize> SharedRamRing<N> {
     }
 
     /// Pop the oldest item (drains ring to flash first to preserve ordering).
-    pub async fn pop<'d, S: MultiwriteNorFlash, C: CacheImpl>(
+    pub async fn pop<'d, S: DeletionNorFlash, C: CacheImpl>(
         &self,
         storage: &mut QueueStorage<S, C>,
         data_buffer: &'d mut [u8],
@@ -497,7 +494,7 @@ impl<const N: usize> SharedRamRing<N> {
     }
 
     /// Peek at the oldest item without removing it (drains ring to flash first).
-    pub async fn peek<'d, S: MultiwriteNorFlash, C: CacheImpl>(
+    pub async fn peek<'d, S: NorFlash, C: CacheImpl>(
         &self,
         storage: &mut QueueStorage<S, C>,
         data_buffer: &'d mut [u8],

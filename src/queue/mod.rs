@@ -7,11 +7,11 @@ use crate::item::{Item, ItemHeader, ItemHeaderIter};
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 
 use super::{
-    Debug, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState,
-    PhantomData, Range, cache, calculate_page_address, calculate_page_end_address,
-    calculate_page_index, calculate_page_size, item, run_with_auto_repair,
+    Debug, DeletionNorFlash, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash,
+    NorFlashExt, PageState, PhantomData, Range, cache, calculate_page_address,
+    calculate_page_end_address, calculate_page_index, calculate_page_size, item,
+    run_with_auto_repair,
 };
-use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
 /// Configuration for a queue
 pub struct QueueConfig<S> {
@@ -301,14 +301,24 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
     where
-        S: MultiwriteNorFlash,
+        S: DeletionNorFlash,
+    {
+        self.pop_inner(data_buffer).await
+    }
+
+    async fn pop_inner<'d>(
+        &mut self,
+        data_buffer: &'d mut [u8],
+    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
+    where
+        S: DeletionNorFlash,
     {
         let mut iterator = self.iter().await?;
 
         let next_value = iterator.next(data_buffer).await?;
 
         match next_value {
-            Some(entry) => Ok(Some(entry.pop().await?)),
+            Some(entry) => Ok(Some(entry.pop_inner().await?)),
             None => Ok(None),
         }
     }
@@ -733,9 +743,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
             // No need to worry about cache here since that has been dealt with at the creation of this iterator
             if let (Some(found_item_header), found_item_address) = it
-                .traverse(&mut self.storage.inner.flash, |header, _| {
-                    header.crc.is_none()
-                })
+                .traverse(&mut self.storage.inner.flash, |header, _| header.erased)
                 .await?
             {
                 let maybe_item = found_item_header
@@ -821,7 +829,14 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
     /// future peeks won't find this data anymore.
     pub async fn pop(self) -> Result<&'d mut [u8], Error<S::Error>>
     where
-        S: MultiwriteNorFlash,
+        S: DeletionNorFlash,
+    {
+        self.pop_inner().await
+    }
+
+    async fn pop_inner(self) -> Result<&'d mut [u8], Error<S::Error>>
+    where
+        S: DeletionNorFlash,
     {
         let (header, item_data_buffer) = self.item.header_and_data_owned();
 
@@ -855,8 +870,11 @@ mod tests {
     use crate::{
         AlignedBuf,
         cache::NoCache,
-        mock_flash::{self, FlashAverageStatsResult, FlashStatsResult, WriteCountCheck},
+        mock_flash::{self, WriteCountCheck},
     };
+
+    #[cfg(not(feature = "tombstone"))]
+    use crate::mock_flash::{FlashAverageStatsResult, FlashStatsResult};
 
     use super::*;
     use futures_test::test;
@@ -864,6 +882,7 @@ mod tests {
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
+    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn peek_and_overwrite_old_data() {
         let mut storage = QueueStorage::new(
@@ -1009,6 +1028,36 @@ mod tests {
         assert_eq!(i, COUNT);
     }
 
+    #[cfg(feature = "tombstone")]
+    #[test]
+    async fn pop_with_once_only_flash() {
+        let mut storage = QueueStorage::new(
+            MockFlashTiny::new(WriteCountCheck::OnceOnly, None, true),
+            const { QueueConfig::new(0x00..0x40) },
+            NoCache::new(),
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+        let first = AlignedBuf(*b"first");
+        let second = AlignedBuf(*b"second");
+
+        storage.push(&first[..], false).await.unwrap();
+        storage.push(&second[..], false).await.unwrap();
+
+        assert_eq!(
+            storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            storage.peek(&mut data_buffer).await.unwrap().unwrap(),
+            b"second"
+        );
+        assert_eq!(
+            storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+            b"second"
+        );
+        assert_eq!(storage.pop(&mut data_buffer).await.unwrap(), None);
+    }
+
     #[test]
     async fn push_pop_tiny() {
         let mut storage = QueueStorage::new(
@@ -1045,6 +1094,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "tombstone"))]
     #[test]
     /// Same as [push_lots_then_pop_lots], except with added peeking and using the iterator style
     async fn push_peek_pop_many() {
@@ -1199,6 +1249,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn push_lots_then_pop_lots() {
         let mut storage = QueueStorage::new(
@@ -1323,6 +1374,7 @@ mod tests {
         assert_eq!(storage.find_oldest_page().await.unwrap(), 0);
     }
 
+    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn store_too_big_item() {
         let mut storage = QueueStorage::new(
@@ -1351,9 +1403,10 @@ mod tests {
             const { QueueConfig::new(0x000..0x400) },
             NoCache::new(),
         );
+        let data = AlignedBuf([0, 1, 2, 3, 4, 0, 0, 0]);
 
         for _ in 0..100 {
-            match storage.push(&[0, 1, 2, 3, 4], true).await {
+            match storage.push(&data[..5], true).await {
                 Ok(_) => {}
                 Err(e) => {
                     println!("{}", storage.print_items().await);

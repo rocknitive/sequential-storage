@@ -1,7 +1,6 @@
 //! Implementation of the map logic.
 
 use core::{marker::PhantomData, mem::size_of};
-use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
 #[cfg(feature = "postcard")]
 use serde::{Deserialize, Serialize};
@@ -14,9 +13,9 @@ use self::{
 };
 
 use super::{
-    Debug, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState, Range, cache,
-    calculate_page_address, calculate_page_end_address, calculate_page_index, calculate_page_size,
-    item, run_with_auto_repair,
+    Debug, DeletionNorFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt,
+    PageState, Range, cache, calculate_page_address, calculate_page_end_address,
+    calculate_page_index, calculate_page_size, item, run_with_auto_repair,
 };
 
 /// Configuration for a map
@@ -546,7 +545,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         search_key: &K,
     ) -> Result<(), Error<S::Error>>
     where
-        S: MultiwriteNorFlash,
+        S: DeletionNorFlash,
     {
         run_with_auto_repair!(
             function = self.remove_item_inner(data_buffer, Some(search_key)).await,
@@ -566,7 +565,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// </div>
     pub async fn remove_all_items(&mut self, data_buffer: &mut [u8]) -> Result<(), Error<S::Error>>
     where
-        S: MultiwriteNorFlash,
+        S: DeletionNorFlash,
     {
         run_with_auto_repair!(
             function = self.remove_item_inner(data_buffer, None).await,
@@ -581,7 +580,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         search_key: Option<&K>,
     ) -> Result<(), Error<S::Error>>
     where
-        S: MultiwriteNorFlash,
+        S: DeletionNorFlash,
     {
         if let Some(key) = &search_key {
             self.inner.cache.notice_key_erased(key);
@@ -1490,6 +1489,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn store_too_many_items() {
         const UPPER_BOUND: u8 = 3;
@@ -1534,6 +1534,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn store_too_many_items_big() {
         const UPPER_BOUND: u8 = 68;
@@ -1682,6 +1683,46 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tombstone")]
+    #[test]
+    async fn remove_item_with_once_only_flash() {
+        let mut storage = MapStorage::new(
+            MockFlashTiny::new(mock_flash::WriteCountCheck::OnceOnly, None, true),
+            const { MapConfig::new(0x00..0x40) },
+            NoCache::new(),
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+        let one = b"one".as_slice();
+        let two = b"two".as_slice();
+
+        storage
+            .store_item(&mut data_buffer, &1u8, &one)
+            .await
+            .unwrap();
+        storage
+            .store_item(&mut data_buffer, &2u8, &two)
+            .await
+            .unwrap();
+
+        storage.remove_item(&mut data_buffer, &1u8).await.unwrap();
+
+        assert!(
+            storage
+                .fetch_item::<&[u8]>(&mut data_buffer, &1u8)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            storage
+                .fetch_item::<&[u8]>(&mut data_buffer, &2u8)
+                .await
+                .unwrap()
+                .unwrap(),
+            b"two"
+        );
+    }
+
     #[test]
     async fn remove_all() {
         let mut storage = MapStorage::new(
@@ -1731,6 +1772,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn store_too_big_item() {
         let mut storage = MapStorage::new(

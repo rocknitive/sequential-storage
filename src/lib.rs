@@ -9,6 +9,8 @@ use core::{
     marker::PhantomData,
     ops::{Deref, DerefMut, Range},
 };
+#[cfg(not(feature = "tombstone"))]
+use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use embedded_storage_async::nor_flash::NorFlash;
 use map::SerializationError;
 
@@ -34,6 +36,29 @@ pub mod mock_flash;
 /// Stm32 internal flash has 256-bit words, so 32 bytes.
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
+
+/// Flash capability required for logically deleting stored items.
+///
+/// Without the `tombstone` feature this is implemented for [`MultiwriteNorFlash`] flash only,
+/// because deletion rewrites an existing item header. With the `tombstone` feature this is
+/// implemented for every [`NorFlash`] flash, because deletion writes a reserved, previously-erased
+/// tombstone word.
+pub trait DeletionNorFlash: NorFlash {}
+
+#[cfg(not(feature = "tombstone"))]
+impl<T: MultiwriteNorFlash> DeletionNorFlash for T {}
+
+#[cfg(feature = "tombstone")]
+impl<T: NorFlash> DeletionNorFlash for T {}
+
+/// We only care about the data in the first byte to aid shutdown/cancellation.
+/// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
+/// So only half of the byte needs to be zero.
+const MARKER_SET_BITS: u32 = 4;
+
+fn marker_is_set(marker: &[u8]) -> bool {
+    marker.iter().map(|byte| byte.count_zeros()).sum::<u32>() >= MARKER_SET_BITS
+}
 
 /// The generic object that manages the flash.
 /// This is mostly an internal type.
@@ -146,11 +171,6 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         }
 
         let page_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
-        /// We only care about the data in the first byte to aid shutdown/cancellation.
-        /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
-        /// So only half of the byte needs to be zero.
-        const HALF_MARKER_BITS: u32 = 4;
-
         let mut buffer = [0; MAX_WORD_SIZE];
         self.flash
             .read(page_address, &mut buffer[..S::READ_SIZE])
@@ -160,11 +180,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             })?;
-        let start_marked = buffer[..S::READ_SIZE]
-            .iter()
-            .map(|marker_byte| marker_byte.count_zeros())
-            .sum::<u32>()
-            >= HALF_MARKER_BITS;
+        let start_marked = marker_is_set(&buffer[..S::READ_SIZE]);
 
         self.flash
             .read(
@@ -177,11 +193,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             })?;
-        let end_marked = buffer[..S::READ_SIZE]
-            .iter()
-            .map(|marker_byte| marker_byte.count_zeros())
-            .sum::<u32>()
-            >= HALF_MARKER_BITS;
+        let end_marked = marker_is_set(&buffer[..S::READ_SIZE]);
 
         let discovered_state = match (start_marked, end_marked) {
             (true, true) => PageState::Closed,
