@@ -7,7 +7,7 @@ use crate::item::{Item, ItemHeader, ItemHeaderIter};
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 
 use super::{
-    Debug, DeletionNorFlash, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash,
+    Debug, DeletableFlash, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash,
     NorFlashExt, PageState, PhantomData, Range, cache, calculate_page_address,
     calculate_page_end_address, calculate_page_index, calculate_page_size, item,
     run_with_auto_repair,
@@ -301,7 +301,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
     where
-        S: DeletionNorFlash,
+        S: DeletableFlash,
     {
         self.pop_inner(data_buffer).await
     }
@@ -311,7 +311,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
     where
-        S: DeletionNorFlash,
+        S: DeletableFlash,
     {
         let mut iterator = self.iter().await?;
 
@@ -829,14 +829,14 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
     /// future peeks won't find this data anymore.
     pub async fn pop(self) -> Result<&'d mut [u8], Error<S::Error>>
     where
-        S: DeletionNorFlash,
+        S: DeletableFlash,
     {
         self.pop_inner().await
     }
 
     async fn pop_inner(self) -> Result<&'d mut [u8], Error<S::Error>>
     where
-        S: DeletionNorFlash,
+        S: DeletableFlash,
     {
         let (header, item_data_buffer) = self.item.header_and_data_owned();
 

@@ -32,7 +32,7 @@
 use embedded_storage_async::nor_flash::NorFlash;
 
 use super::QueueStorage;
-use crate::{DeletionNorFlash, Error, cache::CacheImpl};
+use crate::{DeletableFlash, Error, cache::CacheImpl};
 
 // ── RamRing ──────────────────────────────────────────────────────────────────
 
@@ -280,7 +280,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
     where
-        S: DeletionNorFlash,
+        S: DeletableFlash,
     {
         // Reborrow so we can reuse data_buffer if flash returns None.
         let flash_len = self.storage.pop(&mut *data_buffer).await?.map(|s| s.len());
@@ -480,7 +480,7 @@ impl<const N: usize> SharedRamRing<N> {
     }
 
     /// Pop the oldest item (drains ring to flash first to preserve ordering).
-    pub async fn pop<'d, S: DeletionNorFlash, C: CacheImpl>(
+    pub async fn pop<'d, S: DeletableFlash, C: CacheImpl>(
         &self,
         storage: &mut QueueStorage<S, C>,
         data_buffer: &'d mut [u8],

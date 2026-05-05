@@ -13,7 +13,7 @@ use self::{
 };
 
 use super::{
-    Debug, DeletionNorFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt,
+    Debug, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt,
     PageState, Range, cache, calculate_page_address, calculate_page_end_address,
     calculate_page_index, calculate_page_size, item, run_with_auto_repair,
 };
@@ -545,7 +545,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         search_key: &K,
     ) -> Result<(), Error<S::Error>>
     where
-        S: DeletionNorFlash,
+        S: DeletableFlash,
     {
         run_with_auto_repair!(
             function = self.remove_item_inner(data_buffer, Some(search_key)).await,
@@ -565,7 +565,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// </div>
     pub async fn remove_all_items(&mut self, data_buffer: &mut [u8]) -> Result<(), Error<S::Error>>
     where
-        S: DeletionNorFlash,
+        S: DeletableFlash,
     {
         run_with_auto_repair!(
             function = self.remove_item_inner(data_buffer, None).await,
@@ -580,7 +580,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         search_key: Option<&K>,
     ) -> Result<(), Error<S::Error>>
     where
-        S: DeletionNorFlash,
+        S: DeletableFlash,
     {
         if let Some(key) = &search_key {
             self.inner.cache.notice_key_erased(key);

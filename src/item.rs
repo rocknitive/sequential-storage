@@ -32,7 +32,7 @@ use core::ops::Range;
 use embedded_storage_async::nor_flash::NorFlash;
 
 use crate::{
-    AlignedBuf, DeletionNorFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
+    AlignedBuf, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
     cache::{CacheImpl, PrivateCacheImpl},
     calculate_page_address, calculate_page_end_address, calculate_page_index,
     round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
@@ -227,7 +227,7 @@ impl ItemHeader {
 
     /// Erase this item by setting the crc to none and overwriting the header with it.
     /// If the tombstone feature is enabled, this will write the reserved tombstone word instead.
-    pub async fn erase_data<S: DeletionNorFlash>(
+    pub async fn erase_data<S: DeletableFlash>(
         mut self,
         flash: &mut S,
         flash_range: Range<u32>,

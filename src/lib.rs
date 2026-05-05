@@ -43,13 +43,13 @@ const MAX_WORD_SIZE: usize = 32;
 /// because deletion rewrites an existing item header. With the `tombstone` feature this is
 /// implemented for every [`NorFlash`] flash, because deletion writes a reserved, previously-erased
 /// tombstone word.
-pub trait DeletionNorFlash: NorFlash {}
+pub trait DeletableFlash: NorFlash {}
 
 #[cfg(not(feature = "tombstone"))]
-impl<T: MultiwriteNorFlash> DeletionNorFlash for T {}
+impl<T: MultiwriteNorFlash> DeletableFlash for T {}
 
 #[cfg(feature = "tombstone")]
-impl<T: NorFlash> DeletionNorFlash for T {}
+impl<T: NorFlash> DeletableFlash for T {}
 
 /// We only care about the data in the first byte to aid shutdown/cancellation.
 /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
