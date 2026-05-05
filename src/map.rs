@@ -1489,10 +1489,9 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn store_too_many_items() {
-        const UPPER_BOUND: u8 = 3;
+        let upper_bound = if cfg!(feature = "tombstone") { 2 } else { 3 };
 
         let mut storage = MapStorage::new(
             MockFlashTiny::default(),
@@ -1501,7 +1500,7 @@ mod tests {
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
-        for i in 0..UPPER_BOUND {
+        for i in 0..upper_bound {
             println!("Storing {i:?}");
 
             storage
@@ -1514,14 +1513,14 @@ mod tests {
             storage
                 .store_item(
                     &mut data_buffer,
-                    &UPPER_BOUND,
-                    &vec![0; UPPER_BOUND as usize].as_slice(),
+                    &upper_bound,
+                    &vec![0; upper_bound as usize].as_slice(),
                 )
                 .await,
             Err(Error::FullStorage)
         );
 
-        for i in 0..UPPER_BOUND {
+        for i in 0..upper_bound {
             let item = storage
                 .fetch_item::<&[u8]>(&mut data_buffer, &i)
                 .await
@@ -1534,10 +1533,9 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn store_too_many_items_big() {
-        const UPPER_BOUND: u8 = 68;
+        let upper_bound = if cfg!(feature = "tombstone") { 65 } else { 68 };
 
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
@@ -1546,7 +1544,7 @@ mod tests {
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
-        for i in 0..UPPER_BOUND {
+        for i in 0..upper_bound {
             println!("Storing {i:?}");
 
             storage
@@ -1559,14 +1557,14 @@ mod tests {
             storage
                 .store_item(
                     &mut data_buffer,
-                    &UPPER_BOUND,
-                    &vec![0; UPPER_BOUND as usize].as_slice(),
+                    &upper_bound,
+                    &vec![0; upper_bound as usize].as_slice(),
                 )
                 .await,
             Err(Error::FullStorage)
         );
 
-        for i in 0..UPPER_BOUND {
+        for i in 0..upper_bound {
             let item = storage
                 .fetch_item::<&[u8]>(&mut data_buffer, &i)
                 .await
@@ -1772,7 +1770,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn store_too_big_item() {
         let mut storage = MapStorage::new(
@@ -1781,14 +1778,19 @@ mod tests {
             NoCache::new(),
         );
 
+        const MAX_ITEM_SIZE: usize = MockFlashBig::ERASE_SIZE
+            - 2 * MockFlashBig::WORD_SIZE
+            - MapStorage::<u8, MockFlashBig, NoCache>::item_overhead_size() as usize
+            - core::mem::size_of::<u8>();
+
         storage
-            .store_item(&mut [0; 1024], &0u8, &[0u8; 1024 - 4 * 2 - 8 - 1])
+            .store_item(&mut [0; 1024], &0u8, &[0u8; MAX_ITEM_SIZE])
             .await
             .unwrap();
 
         assert_eq!(
             storage
-                .store_item(&mut [0; 1024], &0u8, &[0u8; 1024 - 4 * 2 - 8 - 1 + 1],)
+                .store_item(&mut [0; 1024], &0u8, &[0u8; MAX_ITEM_SIZE + 1],)
                 .await,
             Err(Error::ItemTooBig)
         );

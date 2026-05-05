@@ -873,7 +873,6 @@ mod tests {
         mock_flash::{self, WriteCountCheck},
     };
 
-    #[cfg(not(feature = "tombstone"))]
     use crate::mock_flash::{FlashAverageStatsResult, FlashStatsResult};
 
     use super::*;
@@ -882,7 +881,6 @@ mod tests {
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
-    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn peek_and_overwrite_old_data() {
         let mut storage = QueueStorage::new(
@@ -891,7 +889,9 @@ mod tests {
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
-        const DATA_SIZE: usize = 22;
+        const PAGE_DATA_SIZE: usize = MockFlashTiny::ERASE_SIZE - 2 * MockFlashTiny::WORD_SIZE;
+        const DATA_SIZE: usize =
+            PAGE_DATA_SIZE - QueueStorage::<MockFlashTiny, NoCache>::item_overhead_size() as usize;
 
         assert_eq!(storage.space_left().await.unwrap(), 60);
 
@@ -1094,7 +1094,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "tombstone"))]
     #[test]
     /// Same as [push_lots_then_pop_lots], except with added peeking and using the iterator style
     async fn push_peek_pop_many() {
@@ -1217,39 +1216,62 @@ mod tests {
         }
 
         // Assert the performance. These numbers can be changed if acceptable.
-        approx::assert_relative_eq!(
-            push_stats.take_average(pushes),
+        let expected_push_stats = if cfg!(feature = "tombstone") {
+            FlashAverageStatsResult {
+                avg_erases: 0.0,
+                avg_reads: 16.3684,
+                avg_writes: 3.1332,
+                avg_bytes_read: 137.3616,
+                avg_bytes_written: 60.5328,
+            }
+        } else {
             FlashAverageStatsResult {
                 avg_erases: 0.0,
                 avg_reads: 16.864,
                 avg_writes: 3.1252,
                 avg_bytes_read: 105.4112,
-                avg_bytes_written: 60.5008
+                avg_bytes_written: 60.5008,
             }
-        );
-        approx::assert_relative_eq!(
-            peek_stats.take_average(peeks),
+        };
+        approx::assert_relative_eq!(push_stats.take_average(pushes), expected_push_stats);
+        let expected_peek_stats = if cfg!(feature = "tombstone") {
+            FlashAverageStatsResult {
+                avg_erases: 0.0264,
+                avg_reads: 3.9796,
+                avg_writes: 0.0,
+                avg_bytes_read: 78.8016,
+                avg_bytes_written: 0.0,
+            }
+        } else {
             FlashAverageStatsResult {
                 avg_erases: 0.0052,
                 avg_reads: 3.8656,
                 avg_writes: 0.0,
                 avg_bytes_read: 70.4256,
-                avg_bytes_written: 0.0
+                avg_bytes_written: 0.0,
             }
-        );
-        approx::assert_relative_eq!(
-            pop_stats.take_average(pops),
+        };
+        approx::assert_relative_eq!(peek_stats.take_average(peeks), expected_peek_stats);
+        let expected_pop_stats = if cfg!(feature = "tombstone") {
+            FlashAverageStatsResult {
+                avg_erases: 0.04,
+                avg_reads: 3.5572,
+                avg_writes: 1.0,
+                avg_bytes_read: 73.7328,
+                avg_bytes_written: 4.0,
+            }
+        } else {
             FlashAverageStatsResult {
                 avg_erases: 0.0572,
                 avg_reads: 3.7772,
                 avg_writes: 1.0,
                 avg_bytes_read: 69.7184,
-                avg_bytes_written: 8.0
+                avg_bytes_written: 8.0,
             }
-        );
+        };
+        approx::assert_relative_eq!(pop_stats.take_average(pops), expected_pop_stats);
     }
 
-    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn push_lots_then_pop_lots() {
         let mut storage = QueueStorage::new(
@@ -1309,26 +1331,42 @@ mod tests {
         }
 
         // Assert the performance. These numbers can be changed if acceptable.
-        approx::assert_relative_eq!(
-            push_stats.take_average(pushes),
+        let expected_push_stats = if cfg!(feature = "tombstone") {
+            FlashAverageStatsResult {
+                avg_erases: 0.0,
+                avg_reads: 16.3684,
+                avg_writes: 3.1332,
+                avg_bytes_read: 137.3616,
+                avg_bytes_written: 60.5328,
+            }
+        } else {
             FlashAverageStatsResult {
                 avg_erases: 0.0,
                 avg_reads: 16.864,
                 avg_writes: 3.1252,
                 avg_bytes_read: 105.4112,
-                avg_bytes_written: 60.5008
+                avg_bytes_written: 60.5008,
             }
-        );
-        approx::assert_relative_eq!(
-            pop_stats.take_average(pops),
+        };
+        approx::assert_relative_eq!(push_stats.take_average(pushes), expected_push_stats);
+        let expected_pop_stats = if cfg!(feature = "tombstone") {
+            FlashAverageStatsResult {
+                avg_erases: 0.0664,
+                avg_reads: 23.1284,
+                avg_writes: 1.0,
+                avg_bytes_read: 212.9328,
+                avg_bytes_written: 4.0,
+            }
+        } else {
             FlashAverageStatsResult {
                 avg_erases: 0.0624,
                 avg_reads: 23.5768,
                 avg_writes: 1.0,
                 avg_bytes_read: 180.512,
-                avg_bytes_written: 8.0
+                avg_bytes_written: 8.0,
             }
-        );
+        };
+        approx::assert_relative_eq!(pop_stats.take_average(pops), expected_pop_stats);
     }
 
     #[test]
@@ -1374,7 +1412,6 @@ mod tests {
         assert_eq!(storage.find_oldest_page().await.unwrap(), 0);
     }
 
-    #[cfg(not(feature = "tombstone"))]
     #[test]
     async fn store_too_big_item() {
         let mut storage = QueueStorage::new(
@@ -1383,14 +1420,18 @@ mod tests {
             NoCache::new(),
         );
 
+        const MAX_ITEM_SIZE: usize = MockFlashBig::ERASE_SIZE
+            - 2 * MockFlashBig::WORD_SIZE
+            - QueueStorage::<MockFlashBig, NoCache>::item_overhead_size() as usize;
+
         storage
-            .push(&AlignedBuf([0; 1024 - 4 * 2 - 8]), false)
+            .push(&AlignedBuf([0; MAX_ITEM_SIZE]), false)
             .await
             .unwrap();
 
         assert_eq!(
             storage
-                .push(&AlignedBuf([0; 1024 - 4 * 2 - 8 + 1]), false,)
+                .push(&AlignedBuf([0; MAX_ITEM_SIZE + 1]), false,)
                 .await,
             Err(Error::ItemTooBig)
         );
