@@ -13,15 +13,75 @@ mod queue_tests {
     const LOOP_COUNT: usize = 2000;
 
     #[test]
-    async fn cache_reduces_reads() {
-        let no_cache = run_test(NoCache::new()).await;
-        let page_state = run_test(PageStateCache::<NUM_PAGES>::new()).await;
-        let page_pointer = run_test(PagePointerCache::<NUM_PAGES>::new()).await;
+    async fn no_cache() {
+        assert_eq!(
+            run_test(NoCache::new()).await,
+            if cfg!(feature = "tombstone") {
+                FlashStatsResult {
+                    erases: 160,
+                    reads: 217896,
+                    writes: 6321,
+                    bytes_read: 677884,
+                    bytes_written: 39321,
+                }
+            } else {
+                FlashStatsResult {
+                    erases: 149,
+                    reads: 165009,
+                    writes: 6299,
+                    bytes_read: 651212,
+                    bytes_written: 53299,
+                }
+            }
+        );
+    }
 
-        assert!(page_state.reads < no_cache.reads);
-        assert!(page_state.bytes_read < no_cache.bytes_read);
-        assert!(page_pointer.reads < page_state.reads);
-        assert!(page_pointer.bytes_read < page_state.bytes_read);
+    #[test]
+    async fn page_state_cache() {
+        assert_eq!(
+            run_test(PageStateCache::<NUM_PAGES>::new()).await,
+            if cfg!(feature = "tombstone") {
+                FlashStatsResult {
+                    erases: 160,
+                    reads: 120650,
+                    writes: 6321,
+                    bytes_read: 580638,
+                    bytes_written: 39321,
+                }
+            } else {
+                FlashStatsResult {
+                    erases: 149,
+                    reads: 68037,
+                    writes: 6299,
+                    bytes_read: 554240,
+                    bytes_written: 53299,
+                }
+            }
+        );
+    }
+
+    #[test]
+    async fn page_pointer_cache() {
+        assert_eq!(
+            run_test(PagePointerCache::<NUM_PAGES>::new()).await,
+            if cfg!(feature = "tombstone") {
+                FlashStatsResult {
+                    erases: 160,
+                    reads: 14013,
+                    writes: 6321,
+                    bytes_read: 94048,
+                    bytes_written: 39321,
+                }
+            } else {
+                FlashStatsResult {
+                    erases: 149,
+                    reads: 9959,
+                    writes: 6299,
+                    bytes_read: 89616,
+                    bytes_written: 53299,
+                }
+            }
+        );
     }
 
     async fn run_test(cache: impl CacheImpl) -> FlashStatsResult {
@@ -78,22 +138,123 @@ mod map_tests {
     const NUM_PAGES: usize = 4;
 
     #[test]
-    async fn cache_reduces_reads() {
-        let no_cache = run_test(NoCache::new()).await;
-        let page_state = run_test(PageStateCache::<NUM_PAGES>::new()).await;
-        let page_pointer = run_test(PagePointerCache::<NUM_PAGES>::new()).await;
-        let key_pointer_half = run_test(KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await;
-        let key_pointer_full = run_test(KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await;
+    async fn no_cache() {
+        assert_eq!(
+            run_test(NoCache::new()).await,
+            if cfg!(feature = "tombstone") {
+                FlashStatsResult {
+                    erases: 432,
+                    reads: 711445,
+                    writes: 10481,
+                    bytes_read: 4521910,
+                    bytes_written: 100917,
+                }
+            } else {
+                FlashStatsResult {
+                    erases: 198,
+                    reads: 233786,
+                    writes: 5201,
+                    bytes_read: 1837101,
+                    bytes_written: 50401,
+                }
+            }
+        );
+    }
 
-        assert!(page_state.reads < no_cache.reads);
-        assert!(page_pointer.reads < page_state.reads);
-        assert!(key_pointer_half.reads < page_pointer.reads);
-        assert!(key_pointer_full.reads < key_pointer_half.reads);
+    #[test]
+    async fn page_state_cache() {
+        assert_eq!(
+            run_test(PageStateCache::<NUM_PAGES>::new()).await,
+            if cfg!(feature = "tombstone") {
+                FlashStatsResult {
+                    erases: 432,
+                    reads: 625849,
+                    writes: 10481,
+                    bytes_read: 4436314,
+                    bytes_written: 100917,
+                }
+            } else {
+                FlashStatsResult {
+                    erases: 198,
+                    reads: 181162,
+                    writes: 5201,
+                    bytes_read: 1784477,
+                    bytes_written: 50401,
+                }
+            }
+        );
+    }
 
-        assert!(page_state.bytes_read < no_cache.bytes_read);
-        assert!(page_pointer.bytes_read < page_state.bytes_read);
-        assert!(key_pointer_half.bytes_read < page_pointer.bytes_read);
-        assert!(key_pointer_full.bytes_read < key_pointer_half.bytes_read);
+    #[test]
+    async fn page_pointer_cache() {
+        assert_eq!(
+            run_test(PagePointerCache::<NUM_PAGES>::new()).await,
+            if cfg!(feature = "tombstone") {
+                FlashStatsResult {
+                    erases: 432,
+                    reads: 576962,
+                    writes: 10481,
+                    bytes_read: 4207191,
+                    bytes_written: 100917,
+                }
+            } else {
+                FlashStatsResult {
+                    erases: 198,
+                    reads: 163273,
+                    writes: 5201,
+                    bytes_read: 1641365,
+                    bytes_written: 50401,
+                }
+            }
+        );
+    }
+
+    #[test]
+    async fn key_pointer_cache_half() {
+        assert_eq!(
+            run_test(KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await,
+            if cfg!(feature = "tombstone") {
+                FlashStatsResult {
+                    erases: 432,
+                    reads: 486180,
+                    writes: 10481,
+                    bytes_read: 3545218,
+                    bytes_written: 100917,
+                }
+            } else {
+                FlashStatsResult {
+                    erases: 198,
+                    reads: 131503,
+                    writes: 5201,
+                    bytes_read: 1299275,
+                    bytes_written: 50401,
+                }
+            }
+        );
+    }
+
+    #[test]
+    async fn key_pointer_cache_full() {
+        assert_eq!(
+            run_test(KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await,
+            if cfg!(feature = "tombstone") {
+                FlashStatsResult {
+                    erases: 432,
+                    reads: 36054,
+                    writes: 10481,
+                    bytes_read: 262382,
+                    bytes_written: 100917,
+                }
+            } else {
+                FlashStatsResult {
+                    erases: 198,
+                    reads: 14510,
+                    writes: 5201,
+                    bytes_read: 150592,
+                    bytes_written: 50401,
+                }
+            }
+        );
     }
 
     async fn run_test(cache: impl KeyCacheImpl<u16>) -> FlashStatsResult {
@@ -138,8 +299,6 @@ mod map_tests {
                     .await
                     .unwrap()
                     .unwrap();
-
-                // println!("Fetched {item:?}");
 
                 assert_eq!(item, vec![i as u8; LENGHT_PER_KEY[i]]);
             }
