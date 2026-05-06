@@ -54,10 +54,13 @@ impl ItemHeader {
     const LENGTH_FIELD: Range<usize> = 4..6;
     const LENGTH_CRC_FIELD: Range<usize> = 6..8;
 
+    /// Calculate the length of the header in bytes, excluding the tombstone word.
     const fn base_header_len<S: NorFlash>() -> usize {
         round_up_to_alignment_usize::<S>(Self::LENGTH)
     }
 
+    /// Calculate the length of the full header in bytes.
+    /// Including the tombstone word if the tombstone feature is enabled.
     const fn header_len<S: NorFlash>() -> usize {
         #[cfg(feature = "tombstone")]
         {
@@ -83,10 +86,10 @@ impl ItemHeader {
         address: u32,
         end_address: u32,
     ) -> Result<Option<Self>, Error<S::Error>> {
-        let mut buffer = [0; MAX_WORD_SIZE * 2];
-        let header_slice_len = Self::header_len::<S>();
+        let mut buffer = [0; MAX_WORD_SIZE];
+        let header_slice_len = Self::base_header_len::<S>();
 
-        if address + header_slice_len as u32 > end_address {
+        if address + Self::header_len::<S>() as u32 > end_address {
             return Ok(None);
         }
 
@@ -135,7 +138,7 @@ impl ItemHeader {
             #[cfg(not(feature = "tombstone"))]
             erased: crc.is_none(),
             #[cfg(feature = "tombstone")]
-            erased: crate::marker_is_set(&buffer[Self::base_header_len::<S>()..header_slice_len]),
+            erased: crate::marker_is_set(flash, Self::tombstone_address::<S>(address)).await?,
         };
 
         if header.next_item_address::<S>(address) > end_address {

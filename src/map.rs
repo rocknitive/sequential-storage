@@ -13,9 +13,9 @@ use self::{
 };
 
 use super::{
-    Debug, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt,
-    PageState, Range, cache, calculate_page_address, calculate_page_end_address,
-    calculate_page_index, calculate_page_size, item, run_with_auto_repair,
+    Debug, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState,
+    Range, cache, calculate_page_address, calculate_page_end_address, calculate_page_index,
+    calculate_page_size, item, run_with_auto_repair,
 };
 
 /// Configuration for a map

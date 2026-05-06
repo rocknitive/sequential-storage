@@ -39,7 +39,7 @@ const MAX_WORD_SIZE: usize = 32;
 
 /// Flash capability required for logically deleting stored items.
 ///
-/// Without the `tombstone` feature this is implemented for [`MultiwriteNorFlash`] flash only,
+/// Without the `tombstone` feature, this is implemented for [`MultiwriteNorFlash`] flash only,
 /// because deletion rewrites an existing item header. With the `tombstone` feature this is
 /// implemented for every [`NorFlash`] flash, because deletion writes a reserved, previously-erased
 /// tombstone word.
@@ -56,8 +56,21 @@ impl<T: NorFlash> DeletableFlash for T {}
 /// So only half of the byte needs to be zero.
 const MARKER_SET_BITS: u32 = 4;
 
-fn marker_is_set(marker: &[u8]) -> bool {
-    marker.iter().map(|byte| byte.count_zeros()).sum::<u32>() >= MARKER_SET_BITS
+async fn marker_is_set<S: NorFlash>(flash: &mut S, offset: u32) -> Result<bool, Error<S::Error>> {
+    let mut buffer = [0; MAX_WORD_SIZE];
+    flash
+        .read(offset, &mut buffer[..S::READ_SIZE])
+        .await
+        .map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+    Ok(buffer[..S::READ_SIZE]
+        .iter()
+        .map(|byte| byte.count_zeros())
+        .sum::<u32>()
+        >= MARKER_SET_BITS)
 }
 
 /// The generic object that manages the flash.
@@ -171,29 +184,12 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         }
 
         let page_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
-        let mut buffer = [0; MAX_WORD_SIZE];
-        self.flash
-            .read(page_address, &mut buffer[..S::READ_SIZE])
-            .await
-            .map_err(|e| Error::Storage {
-                value: e,
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            })?;
-        let start_marked = marker_is_set(&buffer[..S::READ_SIZE]);
-
-        self.flash
-            .read(
-                page_address + (S::ERASE_SIZE - S::READ_SIZE) as u32,
-                &mut buffer[..S::READ_SIZE],
-            )
-            .await
-            .map_err(|e| Error::Storage {
-                value: e,
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            })?;
-        let end_marked = marker_is_set(&buffer[..S::READ_SIZE]);
+        let start_marked = marker_is_set(&mut self.flash, page_address).await?;
+        let end_marked = marker_is_set(
+            &mut self.flash,
+            page_address + (S::ERASE_SIZE - S::READ_SIZE) as u32,
+        )
+        .await?;
 
         let discovered_state = match (start_marked, end_marked) {
             (true, true) => PageState::Closed,
