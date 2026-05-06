@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Added `tombstone` feature, disabled by default. This changes the storage layout such that marking an item as deleted
+  does not require the flash to be able to overwrite existing data.
+  - Enabling this feature is NOT 'disk'-compatible with previous versions.
+
 ## 7.2.0 - 24-03-26
 
 - Added a RAM-buffered queue
