@@ -303,22 +303,12 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     where
         S: DeletableFlash,
     {
-        self.pop_inner(data_buffer).await
-    }
-
-    async fn pop_inner<'d>(
-        &mut self,
-        data_buffer: &'d mut [u8],
-    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
-    where
-        S: DeletableFlash,
-    {
         let mut iterator = self.iter().await?;
 
         let next_value = iterator.next(data_buffer).await?;
 
         match next_value {
-            Some(entry) => Ok(Some(entry.pop_inner().await?)),
+            Some(entry) => Ok(Some(entry.pop().await?)),
             None => Ok(None),
         }
     }
@@ -831,13 +821,6 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
     where
         S: DeletableFlash,
     {
-        self.pop_inner().await
-    }
-
-    async fn pop_inner(self) -> Result<&'d mut [u8], Error<S::Error>>
-    where
-        S: DeletableFlash,
-    {
         let (header, item_data_buffer) = self.item.header_and_data_owned();
 
         // We're popping ourself, so if all previous but us were popped, then now all are popped again
@@ -870,10 +853,8 @@ mod tests {
     use crate::{
         AlignedBuf,
         cache::NoCache,
-        mock_flash::{self, WriteCountCheck},
+        mock_flash::{self, FlashAverageStatsResult, FlashStatsResult, WriteCountCheck},
     };
-
-    use crate::mock_flash::{FlashAverageStatsResult, FlashStatsResult};
 
     use super::*;
     use futures_test::test;
