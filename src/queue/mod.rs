@@ -1200,9 +1200,9 @@ mod tests {
         let expected_push_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 16.3684,
+                avg_reads: 24.3544,
                 avg_writes: 3.1332,
-                avg_bytes_read: 137.3616,
+                avg_bytes_read: 133.3616,
                 avg_bytes_written: 60.5328,
             }
         } else {
@@ -1218,9 +1218,9 @@ mod tests {
         let expected_peek_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
                 avg_erases: 0.0264,
-                avg_reads: 3.9796,
+                avg_reads: 5.7736,
                 avg_writes: 0.0,
-                avg_bytes_read: 78.8016,
+                avg_bytes_read: 78.536,
                 avg_bytes_written: 0.0,
             }
         } else {
@@ -1236,9 +1236,9 @@ mod tests {
         let expected_pop_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
                 avg_erases: 0.04,
-                avg_reads: 3.5572,
+                avg_reads: 4.9552,
                 avg_writes: 1.0,
-                avg_bytes_read: 73.7328,
+                avg_bytes_read: 73.5728,
                 avg_bytes_written: 4.0,
             }
         } else {
@@ -1315,9 +1315,9 @@ mod tests {
         let expected_push_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 16.3684,
+                avg_reads: 24.3544,
                 avg_writes: 3.1332,
-                avg_bytes_read: 137.3616,
+                avg_bytes_read: 133.3616,
                 avg_bytes_written: 60.5328,
             }
         } else {
@@ -1333,9 +1333,9 @@ mod tests {
         let expected_pop_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
                 avg_erases: 0.0664,
-                avg_reads: 23.1284,
+                avg_reads: 32.1144,
                 avg_writes: 1.0,
-                avg_bytes_read: 212.9328,
+                avg_bytes_read: 212.6672,
                 avg_bytes_written: 4.0,
             }
         } else {
