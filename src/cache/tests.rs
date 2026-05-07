@@ -19,10 +19,10 @@ mod queue_tests {
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 160,
-                    reads: 217896,
-                    writes: 6321,
-                    bytes_read: 677884,
-                    bytes_written: 39321,
+                    reads: 218010,
+                    writes: 8321,
+                    bytes_read: 682796,
+                    bytes_written: 41321,
                 }
             } else {
                 FlashStatsResult {
@@ -43,10 +43,10 @@ mod queue_tests {
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 160,
-                    reads: 120650,
-                    writes: 6321,
-                    bytes_read: 580638,
-                    bytes_written: 39321,
+                    reads: 120764,
+                    writes: 8321,
+                    bytes_read: 585550,
+                    bytes_written: 41321,
                 }
             } else {
                 FlashStatsResult {
@@ -67,10 +67,10 @@ mod queue_tests {
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 160,
-                    reads: 14013,
-                    writes: 6321,
-                    bytes_read: 94048,
-                    bytes_written: 39321,
+                    reads: 14089,
+                    writes: 8321,
+                    bytes_read: 98656,
+                    bytes_written: 41321,
                 }
             } else {
                 FlashStatsResult {
@@ -144,10 +144,10 @@ mod map_tests {
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 432,
-                    reads: 711445,
-                    writes: 10481,
-                    bytes_read: 4521910,
-                    bytes_written: 100917,
+                    reads: 712266,
+                    writes: 15287,
+                    bytes_read: 4716382,
+                    bytes_written: 105723,
                 }
             } else {
                 FlashStatsResult {
@@ -168,10 +168,10 @@ mod map_tests {
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 432,
-                    reads: 625849,
-                    writes: 10481,
-                    bytes_read: 4436314,
-                    bytes_written: 100917,
+                    reads: 626670,
+                    writes: 15287,
+                    bytes_read: 4630786,
+                    bytes_written: 105723,
                 }
             } else {
                 FlashStatsResult {
@@ -192,10 +192,10 @@ mod map_tests {
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 432,
-                    reads: 576962,
-                    writes: 10481,
-                    bytes_read: 4207191,
-                    bytes_written: 100917,
+                    reads: 577750,
+                    writes: 15287,
+                    bytes_read: 4401399,
+                    bytes_written: 105723,
                 }
             } else {
                 FlashStatsResult {
@@ -216,10 +216,10 @@ mod map_tests {
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 432,
-                    reads: 486180,
-                    writes: 10481,
-                    bytes_read: 3545218,
-                    bytes_written: 100917,
+                    reads: 486911,
+                    writes: 15287,
+                    bytes_read: 3709641,
+                    bytes_written: 105723,
                 }
             } else {
                 FlashStatsResult {
@@ -240,10 +240,10 @@ mod map_tests {
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 432,
-                    reads: 36054,
-                    writes: 10481,
-                    bytes_read: 262382,
-                    bytes_written: 100917,
+                    reads: 36087,
+                    writes: 15287,
+                    bytes_read: 274590,
+                    bytes_written: 105723,
                 }
             } else {
                 FlashStatsResult {

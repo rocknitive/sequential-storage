@@ -41,8 +41,8 @@ const MAX_WORD_SIZE: usize = 32;
 ///
 /// Without the `tombstone` feature, this is implemented for [`MultiwriteNorFlash`] flash only,
 /// because deletion rewrites an existing item header. With the `tombstone` feature this is
-/// implemented for every [`NorFlash`] flash, because deletion writes a reserved, previously-erased
-/// tombstone word.
+/// implemented for every [`NorFlash`] flash, because deletion writes zeros into the flash word
+/// containing the trailing tombstone byte.
 pub trait DeletableFlash: NorFlash {}
 
 #[cfg(not(feature = "tombstone"))]
@@ -52,9 +52,14 @@ impl<T: MultiwriteNorFlash> DeletableFlash for T {}
 impl<T: NorFlash> DeletableFlash for T {}
 
 /// We only care about the data in the first byte to aid shutdown/cancellation.
-/// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
+/// But we also don't want it to be too definitive because we want to survive the occasional bitflip.
 /// So only half of the byte needs to be zero.
 const MARKER_SET_BITS: u32 = 4;
+
+#[cfg(feature = "tombstone")]
+fn marker_byte_is_set(byte: u8) -> bool {
+    byte.count_zeros() >= MARKER_SET_BITS
+}
 
 async fn marker_is_set<S: NorFlash>(flash: &mut S, offset: u32) -> Result<bool, Error<S::Error>> {
     let mut buffer = [0; MAX_WORD_SIZE];
@@ -108,7 +113,17 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
     #[must_use]
     pub const fn item_overhead_size() -> u32 {
-        item::ItemHeader::data_address::<S>(0)
+        let overhead = item::ItemHeader::data_address::<S>(0);
+
+        #[cfg(feature = "tombstone")]
+        {
+            overhead + 1
+        }
+
+        #[cfg(not(feature = "tombstone"))]
+        {
+            overhead
+        }
     }
 
     async fn try_general_repair(&mut self) -> Result<(), Error<S::Error>> {
@@ -375,12 +390,6 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
 
 /// Round up the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.
-const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
-    value.next_multiple_of(S::WORD_SIZE as u32)
-}
-
-/// Round up the the given number to align with the wordsize of the flash.
-/// If the number is already aligned, it is not changed.
 const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
     value.next_multiple_of(S::WORD_SIZE)
 }
@@ -389,6 +398,14 @@ const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
 /// If the number is already aligned, it is not changed.
 const fn round_down_to_alignment<S: NorFlash>(value: u32) -> u32 {
     let alignment = S::WORD_SIZE as u32;
+    (value / alignment) * alignment
+}
+
+/// Round down the given number to align with the read size of the flash.
+/// If the number is already aligned, it is not changed.
+#[cfg(feature = "tombstone")]
+const fn round_down_to_read_alignment<S: NorFlash>(value: u32) -> u32 {
+    let alignment = S::READ_SIZE as u32;
     (value / alignment) * alignment
 }
 

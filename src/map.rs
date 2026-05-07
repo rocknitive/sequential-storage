@@ -439,7 +439,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 if item_data_length > u16::MAX as usize
                     || item_data_length
                         > calculate_page_size::<S>()
-                            .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
+                            .saturating_sub(Self::item_overhead_size() as usize)
                 {
                     self.inner.cache.unmark_dirty();
                     return Err(Error::ItemTooBig);
@@ -1535,7 +1535,7 @@ mod tests {
 
     #[test]
     async fn store_too_many_items_big() {
-        let upper_bound = if cfg!(feature = "tombstone") { 65 } else { 68 };
+        let upper_bound = if cfg!(feature = "tombstone") { 67 } else { 68 };
 
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
@@ -1685,7 +1685,7 @@ mod tests {
     #[test]
     async fn remove_item_with_once_only_flash() {
         let mut storage = MapStorage::new(
-            MockFlashTiny::new(mock_flash::WriteCountCheck::OnceOnly, None, true),
+            MockFlashTiny::new(mock_flash::WriteCountCheck::TwiceWithZero, None, true),
             const { MapConfig::new(0x00..0x40) },
             NoCache::new(),
         );

@@ -16,14 +16,15 @@
 //! The header has a length field that encodes the length of the data, a [`crc16`] of the length (`Length'`)
 //! and a crc field that encodes the checksum of the data.
 //!
-//! If the crc is 0, then the item is counted as being erased.
+//! If the crc is 0, then in the default non-`tombstone` format the item is counted as being erased.
 //! The crc is calculated by [`adapted_crc32`] which never produces a 0 value on its own
 //! and has some other modifications to make corruption less likely to happen.
 //!
-//! With the `tombstone` feature enabled, the on-flash format reserves one additional full flash
-//! word between the header and the data. That word is left erased when the item is written and is
-//! written later to mark the item as erased. This changes the on-flash format, but allows deletion
-//! on flash that only supports one write per word after erase.
+//! With the `tombstone` feature enabled, the on-flash format stores a one-byte trailing tombstone
+//! byte directly after the payload and before the word-alignment padding. The tombstone byte is left erased
+//! when the item is written and later the whole flash word containing it is zeroed to mark the
+//! item as erased. This changes the on-flash format, but allows deletion on flash that only
+//! supports one write per word after erase.
 //!
 
 use core::num::{NonZero, NonZeroU32};
@@ -31,12 +32,13 @@ use core::ops::Range;
 
 use embedded_storage_async::nor_flash::NorFlash;
 
+#[cfg(feature = "tombstone")]
+use crate::round_down_to_read_alignment;
 use crate::{
     AlignedBuf, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
     cache::{CacheImpl, PrivateCacheImpl},
     calculate_page_address, calculate_page_end_address, calculate_page_index,
-    round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
-    round_up_to_alignment_usize,
+    round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment_usize,
 };
 
 #[derive(Debug, Clone)]
@@ -47,6 +49,12 @@ pub struct ItemHeader {
     pub erased: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItemState {
+    NotErased,
+    Erased,
+}
+
 impl ItemHeader {
     const LENGTH: usize = 8;
 
@@ -54,28 +62,72 @@ impl ItemHeader {
     const LENGTH_FIELD: Range<usize> = 4..6;
     const LENGTH_CRC_FIELD: Range<usize> = 6..8;
 
-    /// Calculate the length of the header in bytes, excluding the tombstone word.
-    const fn base_header_len<S: NorFlash>() -> usize {
+    /// Calculate the length of the full header in bytes.
+    const fn header_len<S: NorFlash>() -> usize {
         round_up_to_alignment_usize::<S>(Self::LENGTH)
     }
 
-    /// Calculate the length of the full header in bytes.
-    /// Including the tombstone word if the tombstone feature is enabled.
-    const fn header_len<S: NorFlash>() -> usize {
-        #[cfg(feature = "tombstone")]
-        {
-            Self::base_header_len::<S>() + S::WORD_SIZE
-        }
+    #[cfg(feature = "tombstone")]
+    const fn stored_body_len<S: NorFlash>(&self) -> usize {
+        round_up_to_alignment_usize::<S>(self.length as usize + 1)
+    }
 
-        #[cfg(not(feature = "tombstone"))]
-        {
-            Self::base_header_len::<S>()
-        }
+    #[cfg(not(feature = "tombstone"))]
+    const fn stored_body_len<S: NorFlash>(&self) -> usize {
+        round_up_to_alignment_usize::<S>(self.length as usize)
     }
 
     #[cfg(feature = "tombstone")]
-    const fn tombstone_address<S: NorFlash>(address: u32) -> u32 {
-        address + Self::base_header_len::<S>() as u32
+    const fn tombstone_byte_address<S: NorFlash>(&self, address: u32) -> u32 {
+        Self::data_address::<S>(address) + self.length as u32
+    }
+
+    #[cfg(feature = "tombstone")]
+    const fn tombstone_word_address<S: NorFlash>(&self, address: u32) -> u32 {
+        round_down_to_alignment::<S>(self.tombstone_byte_address::<S>(address))
+    }
+
+    #[cfg(feature = "tombstone")]
+    async fn read_state<S: NorFlash>(
+        &self,
+        flash: &mut S,
+        address: u32,
+    ) -> Result<ItemState, Error<S::Error>> {
+        let mut buffer = [0; MAX_WORD_SIZE];
+        let tombstone_byte_address = self.tombstone_byte_address::<S>(address);
+        let tombstone_read_address = round_down_to_read_alignment::<S>(tombstone_byte_address);
+        flash
+            .read(tombstone_read_address, &mut buffer[..S::READ_SIZE])
+            .await
+            .map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })?;
+
+        let tombstone_byte_index = (tombstone_byte_address - tombstone_read_address) as usize;
+        let tombstone_byte = buffer[tombstone_byte_index];
+
+        Ok(
+            if tombstone_byte != 0xFF && crate::marker_byte_is_set(tombstone_byte) {
+                ItemState::Erased
+            } else {
+                ItemState::NotErased
+            },
+        )
+    }
+
+    #[cfg(not(feature = "tombstone"))]
+    async fn read_state<S: NorFlash>(
+        &self,
+        _flash: &mut S,
+        _address: u32,
+    ) -> Result<ItemState, Error<S::Error>> {
+        Ok(if self.crc.is_none() {
+            ItemState::Erased
+        } else {
+            ItemState::NotErased
+        })
     }
 
     /// Read the header from the flash at the given address.
@@ -87,7 +139,7 @@ impl ItemHeader {
         end_address: u32,
     ) -> Result<Option<Self>, Error<S::Error>> {
         let mut buffer = [0; MAX_WORD_SIZE];
-        let header_slice_len = Self::base_header_len::<S>();
+        let header_slice_len = Self::header_len::<S>();
 
         if address + Self::header_len::<S>() as u32 > end_address {
             return Ok(None);
@@ -127,18 +179,15 @@ impl ItemHeader {
             break;
         }
 
-        let crc = match u32::from_le_bytes(buffer[Self::DATA_CRC_FIELD].try_into().unwrap()) {
-            0 => None,
-            value => Some(NonZeroU32::new(value).unwrap()),
-        };
-
-        let header = Self {
+        let mut header = Self {
             length: u16::from_le_bytes(buffer[Self::LENGTH_FIELD].try_into().unwrap()),
-            crc,
-            #[cfg(not(feature = "tombstone"))]
-            erased: crc.is_none(),
-            #[cfg(feature = "tombstone")]
-            erased: crate::marker_is_set(flash, Self::tombstone_address::<S>(address)).await?,
+            crc: {
+                match u32::from_le_bytes(buffer[Self::DATA_CRC_FIELD].try_into().unwrap()) {
+                    0 => None,
+                    value => Some(NonZeroU32::new(value).unwrap()),
+                }
+            },
+            erased: false,
         };
 
         if header.next_item_address::<S>(address) > end_address {
@@ -150,6 +199,8 @@ impl ItemHeader {
                 backtrace: std::backtrace::Backtrace::capture(),
             });
         }
+
+        header.erased = matches!(header.read_state(flash, address).await?, ItemState::Erased);
 
         Ok(Some(header))
     }
@@ -168,7 +219,7 @@ impl ItemHeader {
             None => Ok(MaybeItem::Corrupted(self, data_buffer)),
             Some(header_crc) => {
                 let data_address = ItemHeader::data_address::<S>(address);
-                let read_len = round_up_to_alignment_usize::<S>(self.length as usize);
+                let read_len = self.stored_body_len::<S>();
                 if data_address + read_len as u32 > end_address {
                     return Ok(MaybeItem::Corrupted(self, data_buffer));
                 }
@@ -219,7 +270,7 @@ impl ItemHeader {
             .copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
 
         flash
-            .write(address, &buffer[..Self::base_header_len::<S>()])
+            .write(address, &buffer[..Self::header_len::<S>()])
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -229,7 +280,8 @@ impl ItemHeader {
     }
 
     /// Erase this item by setting the crc to none and overwriting the header with it.
-    /// If the tombstone feature is enabled, this will write the reserved tombstone word instead.
+    /// If the tombstone feature is enabled, this will write the flash word containing the trailing
+    /// tombstone byte instead.
     pub async fn erase_data<S: DeletableFlash>(
         mut self,
         flash: &mut S,
@@ -250,7 +302,7 @@ impl ItemHeader {
             let buffer = AlignedBuf([crate::MARKER; MAX_WORD_SIZE]);
             flash
                 .write(
-                    Self::tombstone_address::<S>(address),
+                    self.tombstone_word_address::<S>(address),
                     &buffer[..S::WORD_SIZE],
                 )
                 .await
@@ -271,7 +323,7 @@ impl ItemHeader {
     /// Get the location of the next item in flash
     pub const fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
         let data_address = ItemHeader::data_address::<S>(address);
-        data_address + round_up_to_alignment::<S>(self.length as u32)
+        data_address + self.stored_body_len::<S>() as u32
     }
 
     /// Calculates the amount of bytes available for data.
@@ -280,7 +332,19 @@ impl ItemHeader {
         let data_start = Self::data_address::<S>(0);
         let data_end = round_down_to_alignment::<S>(total_available);
 
-        data_end.checked_sub(data_start)
+        let Some(available) = data_end.checked_sub(data_start) else {
+            return None;
+        };
+
+        #[cfg(feature = "tombstone")]
+        {
+            available.checked_sub(1)
+        }
+
+        #[cfg(not(feature = "tombstone"))]
+        {
+            Some(available)
+        }
     }
 }
 
@@ -359,10 +423,9 @@ impl<'d> Item<'d> {
                 })?;
         }
 
-        if !data_left.is_empty() {
+        let extend_len = header.stored_body_len::<S>() - data_block.len();
+        if extend_len != 0 {
             let mut buffer = AlignedBuf([0; MAX_WORD_SIZE]);
-
-            let extend_len = round_up_to_alignment_usize::<S>(data_left.len());
 
             if extend_len > buffer.len() {
                 debug_assert!(false);
@@ -373,6 +436,12 @@ impl<'d> Item<'d> {
             }
 
             buffer[..data_left.len()].copy_from_slice(data_left);
+
+            #[cfg(feature = "tombstone")]
+            {
+                buffer[data_left.len()] = 0xFF;
+            }
+
             flash
                 .write(
                     data_address + data_block.len() as u32,
@@ -597,16 +666,21 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                     calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
                         - S::WORD_SIZE as u32;
 
-                Ok(ItemHeaderIter::new(
+                let mut item_headers = ItemHeaderIter::new(
                     self.cache
                         .first_item_after_erased(page_index)
                         .unwrap_or(page_data_start_address),
                     page_data_end_address,
-                )
-                .traverse(&mut self.flash, |header, _| header.erased)
-                .await?
-                .0
-                .is_none())
+                );
+
+                while let (Some(header), _item_address) = item_headers.next(&mut self.flash).await?
+                {
+                    if !header.erased {
+                        return Ok(false);
+                    }
+                }
+
+                Ok(true)
             }
             PageState::PartialOpen => Ok(false),
             PageState::Open => Ok(true),

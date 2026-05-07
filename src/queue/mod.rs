@@ -164,7 +164,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         if data.len() > u16::MAX as usize
             || data.len()
                 > calculate_page_size::<S>()
-                    .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
+                    .saturating_sub(Self::item_overhead_size() as usize)
         {
             self.inner.cache.unmark_dirty();
             return Err(Error::ItemTooBig);
@@ -736,6 +736,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
                 .traverse(&mut self.storage.inner.flash, |header, _| header.erased)
                 .await?
             {
+                let next_address = found_item_header.next_item_address::<S>(found_item_address);
                 let maybe_item = found_item_header
                     .read_item(
                         &mut self.storage.inner.flash,
@@ -745,30 +746,15 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
                     )
                     .await?;
 
-                match maybe_item {
-                    item::MaybeItem::Corrupted(header, _) => {
-                        let next_address = header.next_item_address::<S>(found_item_address);
-                        self.next_address = if next_address >= page_data_end_address {
-                            NextAddress::PageAfter(current_page)
-                        } else {
-                            NextAddress::Address(next_address)
-                        };
-                    }
-                    item::MaybeItem::Erased(_, _) => {
-                        // Item is already erased
-                        return Err(Error::LogicBug {
-                            #[cfg(feature = "_test")]
-                            backtrace: std::backtrace::Backtrace::capture(),
-                        });
-                    }
-                    item::MaybeItem::Present(item) => {
-                        let next_address = item.header.next_item_address::<S>(found_item_address);
-                        self.next_address = if next_address >= page_data_end_address {
-                            NextAddress::PageAfter(current_page)
-                        } else {
-                            NextAddress::Address(next_address)
-                        };
+                self.next_address = if next_address >= page_data_end_address {
+                    NextAddress::PageAfter(current_page)
+                } else {
+                    NextAddress::Address(next_address)
+                };
 
+                match maybe_item {
+                    item::MaybeItem::Corrupted(_, _) | item::MaybeItem::Erased(_, _) => continue,
+                    item::MaybeItem::Present(item) => {
                         // Record that the current item hasn't been popped (yet)
                         if self.previous_item_states == PreviousItemStates::AllPopped {
                             self.previous_item_states = PreviousItemStates::AllButCurrentPopped;
@@ -1013,7 +999,7 @@ mod tests {
     #[test]
     async fn pop_with_once_only_flash() {
         let mut storage = QueueStorage::new(
-            MockFlashTiny::new(WriteCountCheck::OnceOnly, None, true),
+            MockFlashTiny::new(WriteCountCheck::TwiceWithZero, None, true),
             const { QueueConfig::new(0x00..0x40) },
             NoCache::new(),
         );
@@ -1200,10 +1186,10 @@ mod tests {
         let expected_push_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 24.3544,
-                avg_writes: 3.1332,
-                avg_bytes_read: 133.3616,
-                avg_bytes_written: 60.5328,
+                avg_reads: 25.3528,
+                avg_writes: 3.1252,
+                avg_bytes_read: 139.3664,
+                avg_bytes_written: 60.5008,
             }
         } else {
             FlashAverageStatsResult {
@@ -1217,10 +1203,10 @@ mod tests {
         approx::assert_relative_eq!(push_stats.take_average(pushes), expected_push_stats);
         let expected_peek_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
-                avg_erases: 0.0264,
-                avg_reads: 5.7736,
+                avg_erases: 0.0052,
+                avg_reads: 5.544,
                 avg_writes: 0.0,
-                avg_bytes_read: 78.536,
+                avg_bytes_read: 77.1392,
                 avg_bytes_written: 0.0,
             }
         } else {
@@ -1235,10 +1221,10 @@ mod tests {
         approx::assert_relative_eq!(peek_stats.take_average(peeks), expected_peek_stats);
         let expected_pop_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
-                avg_erases: 0.04,
-                avg_reads: 4.9552,
+                avg_erases: 0.0572,
+                avg_reads: 5.3724,
                 avg_writes: 1.0,
-                avg_bytes_read: 73.5728,
+                avg_bytes_read: 76.0992,
                 avg_bytes_written: 4.0,
             }
         } else {
@@ -1315,10 +1301,10 @@ mod tests {
         let expected_push_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 24.3544,
-                avg_writes: 3.1332,
-                avg_bytes_read: 133.3616,
-                avg_bytes_written: 60.5328,
+                avg_reads: 25.3528,
+                avg_writes: 3.1252,
+                avg_bytes_read: 139.3664,
+                avg_bytes_written: 60.5008,
             }
         } else {
             FlashAverageStatsResult {
@@ -1332,10 +1318,10 @@ mod tests {
         approx::assert_relative_eq!(push_stats.take_average(pushes), expected_push_stats);
         let expected_pop_stats = if cfg!(feature = "tombstone") {
             FlashAverageStatsResult {
-                avg_erases: 0.0664,
-                avg_reads: 32.1144,
+                avg_erases: 0.0624,
+                avg_reads: 33.0656,
                 avg_writes: 1.0,
-                avg_bytes_read: 212.6672,
+                avg_bytes_read: 218.4672,
                 avg_bytes_written: 4.0,
             }
         } else {
