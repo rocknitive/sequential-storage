@@ -34,7 +34,6 @@ use embedded_storage_async::nor_flash::NorFlash;
 use crate::{
     AlignedBuf, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
     cache::{CacheImpl, PrivateCacheImpl},
-    calculate_page_end_address, calculate_page_index, page_data_start_address,
     round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
     round_up_to_alignment_usize,
 };
@@ -542,7 +541,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         end_address: u32,
         data_length: u32,
     ) -> Result<Option<u32>, Error<S::Error>> {
-        let page_index = calculate_page_index::<S>(self.flash_range.clone(), start_address);
+        let page_index = self.layout().page_index(start_address);
 
         let free_item_address = match self.cache.first_item_after_written(page_index) {
             Some(free_item_address) => free_item_address,
@@ -590,11 +589,9 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
 
         match page_state {
             PageState::Closed => {
-                let page_data_start_address =
-                    page_data_start_address::<S>(self.flash_range.clone(), page_index);
-                let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                        - S::WORD_SIZE as u32;
+                let page = self.layout().page(page_index);
+                let page_data_start_address = page.data_start_address();
+                let page_data_end_address = page.data_end_address();
 
                 Ok(ItemHeaderIter::new(
                     self.cache

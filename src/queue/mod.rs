@@ -9,8 +9,8 @@ use self::{cache::CacheImpl, item::ItemUnborrowed};
 use super::VersionPolicy;
 use super::{
     Debug, DeletableFlash, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash,
-    NorFlashExt, PageState, PhantomData, Range, cache, calculate_page_end_address,
-    calculate_page_index, calculate_page_size, item, page_data_start_address, run_with_auto_repair,
+    NorFlashExt, PageState, PhantomData, Range, cache, calculate_page_size, item,
+    run_with_auto_repair,
 };
 
 /// Configuration for a queue
@@ -175,10 +175,9 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
 
         let current_page = self.find_youngest_page().await?;
 
-        let current_page_data_start_address =
-            page_data_start_address::<S>(self.flash_range(), current_page);
-        let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
+        let current_page_layout = self.inner.layout().page(current_page);
+        let current_page_data_start_address = current_page_layout.data_start_address();
+        let page_data_end_address = current_page_layout.data_end_address();
 
         self.inner.partial_close_page(current_page).await?;
 
@@ -203,12 +202,11 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                 (PageState::Open, _) => {
                     self.inner.close_page(current_page).await?;
                     self.inner.partial_close_page(next_page).await?;
-                    next_address =
-                        Some(page_data_start_address::<S>(self.flash_range(), next_page));
+                    next_address = Some(self.inner.layout().page(next_page).data_start_address());
                 }
                 (PageState::Closed, _) | (PageState::PartialOpen, true) => {
                     let next_page_data_start_address =
-                        page_data_start_address::<S>(self.flash_range(), next_page);
+                        self.inner.layout().page(next_page).data_start_address();
 
                     if !allow_overwrite_old_data
                         && !self
@@ -356,10 +354,9 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         }
 
         // See how much space we can find in the current page.
-        let page_data_start_address =
-            page_data_start_address::<S>(self.flash_range(), current_page);
-        let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
+        let page = self.inner.layout().page(current_page);
+        let page_data_start_address = page.data_start_address();
+        let page_data_end_address = page.data_end_address();
 
         let next_item_address = match self.inner.cache.first_item_after_written(current_page) {
             Some(next_item_address) => next_item_address,
@@ -415,9 +412,9 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
             }
 
             // See how much space we can find in the current page.
-            let page_data_start_address = page_data_start_address::<S>(self.flash_range(), page);
-            let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range(), page) - S::WORD_SIZE as u32;
+            let page_layout = self.inner.layout().page(page);
+            let page_data_start_address = page_layout.data_start_address();
+            let page_data_end_address = page_layout.data_end_address();
 
             if page_empty {
                 total_free_space += page_data_end_address - page_data_start_address;
@@ -540,7 +537,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         // We start at the start of the oldest page
         let current_address = match self.inner.cache.first_item_after_erased(oldest_page) {
             Some(address) => address,
-            None => page_data_start_address::<S>(self.inner.flash_range.clone(), oldest_page),
+            None => self.inner.layout().page(oldest_page).data_start_address(),
         };
 
         Ok(NextAddress::Address(current_address))
@@ -633,9 +630,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
         )?;
 
         let oldest_page = match start_address {
-            NextAddress::Address(address) => {
-                calculate_page_index::<S>(storage.inner.flash_range.clone(), address)
-            }
+            NextAddress::Address(address) => storage.inner.layout().page_index(address),
             NextAddress::PageAfter(index) => storage.inner.next_page(index),
         };
 
@@ -713,25 +708,28 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
                         self.storage.inner.open_page(previous_page).await?;
                     }
 
-                    let current_address = page_data_start_address::<S>(
-                        self.storage.inner.flash_range.clone(),
-                        next_page,
-                    );
+                    let current_address = self
+                        .storage
+                        .inner
+                        .layout()
+                        .page(next_page)
+                        .data_start_address();
 
                     self.next_address = NextAddress::Address(current_address);
 
                     (next_page, current_address)
                 }
-                NextAddress::Address(address) => (
-                    calculate_page_index::<S>(self.storage.inner.flash_range.clone(), address),
-                    address,
-                ),
+                NextAddress::Address(address) => {
+                    (self.storage.inner.layout().page_index(address), address)
+                }
             };
 
-            let page_data_end_address = calculate_page_end_address::<S>(
-                self.storage.inner.flash_range.clone(),
-                current_page,
-            ) - S::WORD_SIZE as u32;
+            let page_data_end_address = self
+                .storage
+                .inner
+                .layout()
+                .page(current_page)
+                .data_end_address();
 
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);

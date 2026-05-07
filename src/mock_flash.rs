@@ -123,23 +123,17 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     /// - If true, the item is present and fine.
     /// - If false, the item is corrupt or erased.
     pub async fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
-        use crate::NorFlashExt;
-
         if !Self::FULL_FLASH_RANGE.contains(&target_item_address) {
             return None;
         }
 
         let mut buf = [0; 1024 * 16];
 
-        let page_index =
-            crate::calculate_page_index::<Self>(Self::FULL_FLASH_RANGE, target_item_address);
-
-        let page_data_start =
-            crate::calculate_page_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
-                + Self::WORD_SIZE as u32;
-        let page_data_end =
-            crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
-                - Self::WORD_SIZE as u32;
+        let layout = crate::flash_layout::FlashLayout::<Self>::new(Self::FULL_FLASH_RANGE);
+        let page_index = layout.page_index(target_item_address);
+        let page = layout.page(page_index);
+        let page_data_start = page.data_start_address();
+        let page_data_end = page.data_end_address();
 
         let mut found_item = None;
         let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);

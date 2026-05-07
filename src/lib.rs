@@ -3,7 +3,6 @@
 #![doc = include_str!("../README.md")]
 #![allow(clippy::cast_possible_truncation)]
 
-use core::num::NonZeroUsize;
 use core::{
     fmt::Debug,
     marker::PhantomData,
@@ -19,6 +18,7 @@ mod alloc_impl;
 #[cfg(feature = "arrayvec")]
 mod arrayvec_impl;
 pub mod cache;
+mod flash_layout;
 #[cfg(feature = "heapless-09")]
 mod heapless_09_impl;
 #[cfg(feature = "heapless")]
@@ -73,14 +73,6 @@ async fn marker_is_set<S: NorFlash>(flash: &mut S, offset: u32) -> Result<bool, 
         .map(|byte| byte.count_zeros())
         .sum::<u32>()
         >= MARKER_SET_BITS)
-}
-
-const fn page_start_size<S: NorFlash>() -> usize {
-    versioning::page_start_size::<S>()
-}
-
-const fn page_data_start_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
-    calculate_page_address::<S>(flash_range, page_index) + page_start_size::<S>() as u32
 }
 
 /// The generic object that manages the flash.
@@ -148,7 +140,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         starting_page_index: usize,
         page_state: PageState,
     ) -> Result<Option<usize>, Error<S::Error>> {
-        for page_index in self.get_pages(starting_page_index) {
+        for page_index in self.layout().pages_from(starting_page_index) {
             if page_state == self.get_page_state(page_index).await? {
                 return Ok(Some(page_index));
             }
@@ -157,10 +149,8 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         Ok(None)
     }
 
-    fn page_count(&self) -> NonZeroUsize {
-        let page_count = self.flash_range.len() / S::ERASE_SIZE;
-        // Do a max 1 on the page count to prevent a panic. We know it's never 0 because it's checked in the constructor, but the compiler doesn't know
-        NonZeroUsize::new(page_count.max(1)).unwrap()
+    fn layout(&self) -> flash_layout::FlashLayout<S> {
+        flash_layout::FlashLayout::new(self.flash_range.clone())
     }
 
     /// Get all pages in the flash range from the given start to end (that might wrap back to 0)
@@ -168,24 +158,17 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         &self,
         starting_page_index: usize,
     ) -> impl DoubleEndedIterator<Item = usize> + use<S, C> {
-        let page_count = self.page_count();
-        (0..page_count.get()).map(move |index| (index + starting_page_index) % page_count)
+        self.layout().pages_from(starting_page_index)
     }
 
     /// Get the next page index (wrapping around to 0 if required)
     fn next_page(&self, page_index: usize) -> usize {
-        let page_count = self.page_count();
-        (page_index + 1) % page_count
+        self.layout().next_page_index(page_index)
     }
 
     /// Get the previous page index (wrapping around to the biggest page if required)
     fn previous_page(&self, page_index: usize) -> usize {
-        let page_count = self.page_count();
-
-        match page_index.checked_sub(1) {
-            Some(new_page_index) => new_page_index,
-            None => page_count.get() - 1,
-        }
+        self.layout().previous_page_index(page_index)
     }
 
     /// Get the state of the page located at the given index
@@ -194,14 +177,9 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
             return Ok(cached_page_state);
         }
 
-        let page_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
-        let start_marked = versioning::page_start_is_marked(&mut self.flash, page_address).await?;
-
-        let end_marked = marker_is_set(
-            &mut self.flash,
-            page_address + (S::ERASE_SIZE - S::READ_SIZE) as u32,
-        )
-        .await?;
+        let page = self.layout().page(page_index);
+        let start_marked = page.start_is_marked(&mut self.flash).await?;
+        let end_marked = page.end_is_marked(&mut self.flash).await?;
 
         let discovered_state = match (start_marked, end_marked) {
             (true, true) => PageState::Closed,
@@ -228,12 +206,10 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         self.cache
             .notice_page_state(page_index, PageState::Open, true);
 
-        let page_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
-        let page_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), page_index);
+        let page = self.layout().page(page_index);
 
         self.flash
-            .erase(page_address, page_end_address)
+            .erase(page.start_address(), page.end_address())
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -256,9 +232,8 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
             .notice_page_state(page_index, PageState::Closed, true);
 
         let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
-        let page_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                - S::WORD_SIZE as u32;
+        let page = self.layout().page(page_index);
+        let page_end_address = page.end_marker_address();
         // Close the end marker
         self.flash
             .write(page_end_address, &buffer[..S::WORD_SIZE])
@@ -291,10 +266,13 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         self.cache.notice_page_state(page_index, new_state, true);
 
         let buffer = self.versioning.page_start_buffer();
-        let page_start_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
+        let page = self.layout().page(page_index);
         // Close the start marker
         self.flash
-            .write(page_start_address, &buffer[..page_start_size::<S>()])
+            .write(
+                page.start_marker_address(),
+                &buffer[..page.start_marker_size()],
+            )
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -312,7 +290,6 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     #[cfg(any(test, feature = "std"))]
     /// Print all items in flash to the returned string
     pub async fn print_items(&mut self) -> String {
-        use crate::NorFlashExt;
         use std::fmt::Write;
 
         let mut buf = [0; 1024 * 16];
@@ -331,11 +308,9 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                 }
             )
             .unwrap();
-            let page_data_start =
-                crate::page_data_start_address::<S>(self.flash_range.clone(), page_index);
-            let page_data_end =
-                crate::calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                    - S::WORD_SIZE as u32;
+            let page = self.layout().page(page_index);
+            let page_data_start = page.data_start_address();
+            let page_data_end = page.data_end_address();
 
             let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
             while let (Some(header), item_address) =
@@ -413,27 +388,8 @@ const fn round_down_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
     round_down_to_alignment::<S>(value as u32) as usize
 }
 
-/// Calculate the first address of the given page
-const fn calculate_page_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
-    flash_range.start + (S::ERASE_SIZE * page_index) as u32
-}
-
-/// Calculate the last address (exclusive) of the given page
-const fn calculate_page_end_address<S: NorFlash>(
-    flash_range: Range<u32>,
-    page_index: usize,
-) -> u32 {
-    flash_range.start + (S::ERASE_SIZE * (page_index + 1)) as u32
-}
-
-/// Get the page index from any address located inside that page
-const fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> usize {
-    (address - flash_range.start) as usize / S::ERASE_SIZE
-}
-
 const fn calculate_page_size<S: NorFlash>() -> usize {
-    // Page minus the two page status words
-    S::ERASE_SIZE - page_start_size::<S>() - S::WORD_SIZE
+    flash_layout::FlashLayout::<S>::new(0..S::ERASE_SIZE as u32).page_data_size()
 }
 
 /// The marker being used for page states
@@ -787,7 +743,10 @@ mod tests {
     async fn verify_accepts_erased_storage() {
         let mut storage = make_versioned_storage(MockFlashVersioned::default());
 
-        storage.verify(VersionPolicy::ErrorOnMismatch).await.unwrap();
+        storage
+            .verify(VersionPolicy::ErrorOnMismatch)
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -859,7 +818,10 @@ mod tests {
         .unwrap();
 
         let mut storage = make_versioned_storage(flash);
-        storage.verify(VersionPolicy::EraseOnMismatch).await.unwrap();
+        storage
+            .verify(VersionPolicy::EraseOnMismatch)
+            .await
+            .unwrap();
 
         assert!(storage.flash.as_bytes().iter().all(|byte| *byte == u8::MAX));
     }

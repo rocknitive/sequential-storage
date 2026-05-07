@@ -5,7 +5,7 @@ use embedded_storage_async::nor_flash::NorFlash;
 use crate::{
     AlignedBuf, Error, GenericStorage, MARKER, MARKER_SET_BITS, MAX_WORD_SIZE, NorFlashExt,
 };
-use crate::{cache::CacheImpl, calculate_page_address};
+use crate::{cache::CacheImpl, flash_layout::FlashPage};
 
 const PAGE_START_HEADER_MARKER_INDEX: usize = 0;
 const PAGE_START_HEADER_INTERNAL_VERSION_INDEX: usize = 1;
@@ -124,11 +124,14 @@ fn decode_page_start_header(buffer: &[u8]) -> StorageVersionInfo {
 
 async fn get_page_start_status<S: NorFlash>(
     flash: &mut S,
-    offset: u32,
+    page: &FlashPage<S>,
 ) -> Result<PageStartStatus, Error<S::Error>> {
     let mut buffer = [0xFF; MAX_WORD_SIZE];
     flash
-        .read(offset, &mut buffer[..page_start_size::<S>()])
+        .read(
+            page.start_marker_address(),
+            &mut buffer[..page.start_marker_size()],
+        )
         .await
         .map_err(|e| Error::Storage {
             value: e,
@@ -136,7 +139,7 @@ async fn get_page_start_status<S: NorFlash>(
             backtrace: std::backtrace::Backtrace::capture(),
         })?;
 
-    let written = &buffer[..page_start_size::<S>()];
+    let written = &buffer[..page.start_marker_size()];
     if written.iter().all(|byte| *byte == u8::MAX) {
         return Ok(PageStartStatus::Open);
     }
@@ -169,9 +172,9 @@ async fn get_page_start_status<S: NorFlash>(
 
 pub(crate) async fn page_start_is_marked<S: NorFlash>(
     flash: &mut S,
-    offset: u32,
+    page: &FlashPage<S>,
 ) -> Result<bool, Error<S::Error>> {
-    match get_page_start_status(flash, offset).await? {
+    match get_page_start_status(flash, page).await? {
         PageStartStatus::Open => Ok(false),
         PageStartStatus::Written(_) => Ok(true),
         PageStartStatus::Corrupted => Err(Error::Corrupted {
@@ -188,8 +191,8 @@ pub(crate) async fn verify_storage<S: NorFlash, C: CacheImpl>(
     storage.cache.invalidate_cache_state();
 
     for page_index in storage.get_pages(0) {
-        let page_address = calculate_page_address::<S>(storage.flash_range.clone(), page_index);
-        let start_status = get_page_start_status(&mut storage.flash, page_address).await?;
+        let page = storage.layout().page(page_index);
+        let start_status = get_page_start_status(&mut storage.flash, &page).await?;
 
         let PageStartStatus::Written(actual_version) = start_status else {
             if start_status == PageStartStatus::Corrupted {
@@ -237,6 +240,9 @@ pub(crate) const fn flash_format_version() -> u8 {
 }
 
 #[cfg(test)]
-pub(crate) const fn test_state_with_internal_version(internal_version: u8, user_version: u16) -> State {
+pub(crate) const fn test_state_with_internal_version(
+    internal_version: u8,
+    user_version: u16,
+) -> State {
     State::with_internal_version(internal_version, user_version)
 }
