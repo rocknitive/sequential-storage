@@ -12,7 +12,7 @@ const PAGE_START_HEADER_INTERNAL_VERSION_INDEX: usize = 1;
 const PAGE_START_HEADER_USER_VERSION_RANGE: Range<usize> = 2..4;
 const PAGE_START_HEADER_SIZE: usize = 4;
 
-const FLASH_FORMAT_VERSION: u8 = {
+pub const FLASH_FORMAT_VERSION: u8 = {
     const BASE_VERSION: u8 = 1;
     #[cfg(feature = "tombstone")]
     {
@@ -82,7 +82,7 @@ impl State {
     }
 
     #[cfg(test)]
-    const fn with_internal_version(internal_version: u8, user_version: u16) -> Self {
+    pub const fn with_internal_version(internal_version: u8, user_version: u16) -> Self {
         Self {
             internal_version,
             user_version,
@@ -109,17 +109,6 @@ pub(crate) const fn page_start_size<S: NorFlash>() -> usize {
 
 fn marker_byte_is_set(value: u8) -> bool {
     value.count_zeros() >= MARKER_SET_BITS
-}
-
-fn decode_page_start_header(buffer: &[u8]) -> StorageVersionInfo {
-    StorageVersionInfo {
-        internal: buffer[PAGE_START_HEADER_INTERNAL_VERSION_INDEX],
-        user: u16::from_le_bytes(
-            buffer[PAGE_START_HEADER_USER_VERSION_RANGE]
-                .try_into()
-                .unwrap(),
-        ),
-    }
 }
 
 async fn get_page_start_status<S: NorFlash>(
@@ -165,9 +154,14 @@ async fn get_page_start_status<S: NorFlash>(
         return Ok(PageStartStatus::Corrupted);
     }
 
-    Ok(PageStartStatus::Written(decode_page_start_header(
-        &written[..PAGE_START_HEADER_SIZE],
-    )))
+    Ok(PageStartStatus::Written(StorageVersionInfo {
+        internal: written[PAGE_START_HEADER_INTERNAL_VERSION_INDEX],
+        user: u16::from_le_bytes(
+            written[PAGE_START_HEADER_USER_VERSION_RANGE]
+                .try_into()
+                .unwrap(),
+        ),
+    }))
 }
 
 pub(crate) async fn page_start_is_marked<S: NorFlash>(
@@ -232,17 +226,4 @@ pub(crate) async fn verify_storage<S: NorFlash, C: CacheImpl>(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-pub(crate) const fn flash_format_version() -> u8 {
-    FLASH_FORMAT_VERSION
-}
-
-#[cfg(test)]
-pub(crate) const fn test_state_with_internal_version(
-    internal_version: u8,
-    user_version: u16,
-) -> State {
-    State::with_internal_version(internal_version, user_version)
 }

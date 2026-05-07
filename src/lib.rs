@@ -604,6 +604,7 @@ mod tests {
     use crate::cache::NoCache;
 
     use super::*;
+    use crate::versioning::FLASH_FORMAT_VERSION;
     use futures_test::test;
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
@@ -752,34 +753,22 @@ mod tests {
     #[test]
     async fn verify_reports_internal_version_mismatch() {
         let mut flash = MockFlashVersioned::default();
-        write_aligned(
-            &mut flash,
-            0x00,
-            &[
-                MARKER,
-                versioning::flash_format_version().wrapping_add(1),
-                7,
-                0,
-            ],
-        )
-        .await
-        .unwrap();
+        write_aligned(&mut flash, 0x00, &[MARKER, 42, 7, 0])
+            .await
+            .unwrap();
 
         let mut storage = GenericStorage {
             flash,
             flash_range: MockFlashVersioned::FULL_FLASH_RANGE,
             cache: NoCache::new(),
-            versioning: versioning::test_state_with_internal_version(
-                versioning::flash_format_version(),
-                7,
-            ),
+            versioning: versioning::State::with_internal_version(43, 7),
         };
 
         assert_eq!(
             storage.verify(VersionPolicy::ErrorOnMismatch).await,
             Err(Error::VersionMismatch(VersionMismatchKind::Internal {
-                expected: versioning::flash_format_version(),
-                actual: versioning::flash_format_version().wrapping_add(1),
+                expected: 43,
+                actual: 42,
             }))
         );
     }
@@ -787,13 +776,9 @@ mod tests {
     #[test]
     async fn verify_reports_user_version_mismatch() {
         let mut flash = MockFlashVersioned::default();
-        write_aligned(
-            &mut flash,
-            0x00,
-            &[MARKER, versioning::flash_format_version(), 9, 0],
-        )
-        .await
-        .unwrap();
+        write_aligned(&mut flash, 0x00, &[MARKER, FLASH_FORMAT_VERSION, 9, 0])
+            .await
+            .unwrap();
 
         let mut storage = make_versioned_storage(flash);
 
@@ -809,13 +794,9 @@ mod tests {
     #[test]
     async fn verify_erase_policy_clears_mismatched_storage() {
         let mut flash = MockFlashVersioned::default();
-        write_aligned(
-            &mut flash,
-            0x00,
-            &[MARKER, versioning::flash_format_version(), 9, 0],
-        )
-        .await
-        .unwrap();
+        write_aligned(&mut flash, 0x00, &[MARKER, FLASH_FORMAT_VERSION, 9, 0])
+            .await
+            .unwrap();
 
         let mut storage = make_versioned_storage(flash);
         storage
@@ -836,7 +817,7 @@ mod tests {
         );
         assert_eq!(
             &storage.flash.as_bytes()[..4],
-            &[MARKER, versioning::flash_format_version(), 7, 0]
+            &[MARKER, FLASH_FORMAT_VERSION, 7, 0]
         );
     }
 }
