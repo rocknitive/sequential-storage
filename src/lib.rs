@@ -11,6 +11,7 @@ use core::{
 #[cfg(not(feature = "tombstone"))]
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use embedded_storage_async::nor_flash::NorFlash;
+use flash_layout::{FlashPage, StorageVersion};
 use map::SerializationError;
 
 #[cfg(feature = "alloc")]
@@ -26,8 +27,6 @@ mod heapless_impl;
 mod item;
 pub mod map;
 pub mod queue;
-mod versioning;
-pub use versioning::{VersionMismatchKind, VersionPolicy};
 
 #[cfg(any(test, doctest, feature = "_test"))]
 /// An in-memory flash type that can be used for mocking.
@@ -53,10 +52,24 @@ impl<T: MultiwriteNorFlash> DeletableFlash for T {}
 #[cfg(feature = "tombstone")]
 impl<T: NorFlash> DeletableFlash for T {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// How `verify()` should handle mismatches.
+pub enum VersionPolicy {
+    /// Return an error if a mismatch is found.
+    ErrorOnMismatch,
+    /// Erase the full flash range if a mismatch is found.
+    EraseOnMismatch,
+}
+
 /// We only care about the data in the first byte to aid shutdown/cancellation.
 /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
 /// So only half of the byte needs to be zero.
 const MARKER_SET_BITS: u32 = 4;
+
+fn marker_byte_is_set(value: u8) -> bool {
+    value.count_zeros() >= MARKER_SET_BITS
+}
 
 async fn marker_is_set<S: NorFlash>(flash: &mut S, offset: u32) -> Result<bool, Error<S::Error>> {
     let mut buffer = [0; MAX_WORD_SIZE];
@@ -87,7 +100,7 @@ struct GenericStorage<S: NorFlash, C: CacheImpl> {
     flash: S,
     flash_range: Range<u32>,
     cache: C,
-    versioning: versioning::State,
+    versioning: StorageVersion,
 }
 
 impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
@@ -271,7 +284,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         self.flash
             .write(
                 page.start_marker_address(),
-                &buffer[..page.start_marker_size()],
+                &buffer[..FlashPage::<S>::start_marker_size()],
             )
             .await
             .map_err(|e| Error::Storage {
@@ -283,8 +296,34 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         Ok(new_state)
     }
 
-    async fn verify(&mut self, policy: versioning::VersionPolicy) -> Result<(), Error<S::Error>> {
-        versioning::verify_storage(self, policy).await
+    async fn verify(&mut self, policy: VersionPolicy) -> Result<(), Error<S::Error>> {
+        self.cache.invalidate_cache_state();
+
+        for page_index in self.get_pages(0) {
+            let page = self.layout().page(page_index);
+            let start_status = page.get_page_start_status(&mut self.flash).await?;
+
+            let Some(actual) = start_status else {
+                // page is empty
+                continue;
+            };
+
+            if self.versioning != actual {
+                return match policy {
+                    VersionPolicy::ErrorOnMismatch => Err(Error::VersionMismatch {
+                        actual,
+                        expected: self.versioning,
+                    }),
+                    VersionPolicy::EraseOnMismatch => {
+                        self.erase_all().await?;
+                        self.cache.invalidate_cache_state();
+                        Ok(())
+                    }
+                };
+            }
+        }
+
+        Ok(())
     }
 
     #[cfg(any(test, feature = "std"))]
@@ -312,7 +351,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
             let page_data_start = page.data_start_address();
             let page_data_end = page.data_end_address();
 
-            let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
+            let mut it = item::ItemHeaderIter::new(page_data_start, page_data_end);
             while let (Some(header), item_address) =
                 it.traverse(&mut self.flash, |_, _| false).await.unwrap()
             {
@@ -464,7 +503,10 @@ pub enum Error<S> {
         backtrace: std::backtrace::Backtrace,
     },
     /// The storage version information in flash does not match the expected values.
-    VersionMismatch(VersionMismatchKind),
+    VersionMismatch {
+        expected: StorageVersion,
+        actual: StorageVersion,
+    },
     /// A provided buffer was to big to be used
     BufferTooBig,
     /// A provided buffer was to small to be used (usize is size needed)
@@ -512,13 +554,9 @@ where
             Error::LogicBug { .. } => write!(f, "Logic bug"),
             #[cfg(feature = "_test")]
             Error::LogicBug { backtrace } => write!(f, "Logic bug\n{backtrace}"),
-            Error::VersionMismatch(VersionMismatchKind::Internal { expected, actual }) => write!(
+            Error::VersionMismatch { expected, actual } => write!(
                 f,
-                "Storage internal version mismatch. Expected {expected}, found {actual}"
-            ),
-            Error::VersionMismatch(VersionMismatchKind::User { expected, actual }) => write!(
-                f,
-                "Storage user version mismatch. Expected {expected}, found {actual}"
+                "Storage version mismatch. Expected {expected}, found {actual}"
             ),
             Error::BufferTooBig => write!(f, "A provided buffer was to big to be used"),
             Error::BufferTooSmall(needed) => write!(
@@ -604,7 +642,7 @@ mod tests {
     use crate::cache::NoCache;
 
     use super::*;
-    use crate::versioning::FLASH_FORMAT_VERSION;
+    use crate::flash_layout::FLASH_FORMAT_VERSION;
     use futures_test::test;
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
@@ -649,10 +687,10 @@ mod tests {
             .unwrap();
 
         let mut storage = GenericStorage {
-            flash: flash,
+            flash,
             flash_range: 0x000..0x400,
             cache: NoCache::new(),
-            versioning: versioning::State::new(0),
+            versioning: StorageVersion::new(0),
         };
 
         assert_eq!(
@@ -736,7 +774,7 @@ mod tests {
             flash,
             flash_range: MockFlashVersioned::FULL_FLASH_RANGE,
             cache: NoCache::new(),
-            versioning: versioning::State::new(7),
+            versioning: StorageVersion::new(7),
         }
     }
 
@@ -761,15 +799,15 @@ mod tests {
             flash,
             flash_range: MockFlashVersioned::FULL_FLASH_RANGE,
             cache: NoCache::new(),
-            versioning: versioning::State::with_internal_version(43, 7),
+            versioning: StorageVersion::with_internal_version(43, 7),
         };
 
         assert_eq!(
             storage.verify(VersionPolicy::ErrorOnMismatch).await,
-            Err(Error::VersionMismatch(VersionMismatchKind::Internal {
-                expected: 43,
-                actual: 42,
-            }))
+            Err(Error::VersionMismatch {
+                expected: StorageVersion::new(7),
+                actual: StorageVersion::with_internal_version(43, 7),
+            })
         );
     }
 
@@ -784,10 +822,10 @@ mod tests {
 
         assert_eq!(
             storage.verify(VersionPolicy::ErrorOnMismatch).await,
-            Err(Error::VersionMismatch(VersionMismatchKind::User {
-                expected: 7,
-                actual: 9,
-            }))
+            Err(Error::VersionMismatch {
+                expected: StorageVersion::new(9),
+                actual: StorageVersion::new(7),
+            })
         );
     }
 

@@ -152,7 +152,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 flash: storage,
                 flash_range: config.flash_range,
                 cache,
-                versioning: super::versioning::State::new(config.user_version),
+                versioning: super::StorageVersion::new(config.user_version),
             },
             _phantom: PhantomData,
         }
