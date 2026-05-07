@@ -1,4 +1,4 @@
-#[cfg(all(test, not(feature = "versioning")))]
+#[cfg(test)]
 mod queue_tests {
     use crate::{
         AlignedBuf,
@@ -18,19 +18,19 @@ mod queue_tests {
             run_test(NoCache::new()).await,
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
-                    erases: 160,
-                    reads: 217896,
-                    writes: 6321,
-                    bytes_read: 677884,
-                    bytes_written: 39321,
+                    erases: 162,
+                    reads: 216603,
+                    writes: 6325,
+                    bytes_read: 818249,
+                    bytes_written: 39814,
                 }
             } else {
                 FlashStatsResult {
-                    erases: 149,
-                    reads: 165009,
-                    writes: 6299,
-                    bytes_read: 651212,
-                    bytes_written: 53299,
+                    erases: 150,
+                    reads: 164438,
+                    writes: 6301,
+                    bytes_read: 791993,
+                    bytes_written: 53754,
                 }
             }
         );
@@ -42,19 +42,19 @@ mod queue_tests {
             run_test(PageStateCache::<NUM_PAGES>::new()).await,
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
-                    erases: 160,
-                    reads: 120650,
-                    writes: 6321,
-                    bytes_read: 580638,
-                    bytes_written: 39321,
+                    erases: 162,
+                    reads: 119489,
+                    writes: 6325,
+                    bytes_read: 575464,
+                    bytes_written: 39814,
                 }
             } else {
                 FlashStatsResult {
-                    erases: 149,
-                    reads: 68037,
-                    writes: 6299,
-                    bytes_read: 554240,
-                    bytes_written: 53299,
+                    erases: 150,
+                    reads: 67444,
+                    writes: 6301,
+                    bytes_read: 549508,
+                    bytes_written: 53754,
                 }
             }
         );
@@ -66,19 +66,19 @@ mod queue_tests {
             run_test(PagePointerCache::<NUM_PAGES>::new()).await,
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
-                    erases: 160,
-                    reads: 14013,
-                    writes: 6321,
-                    bytes_read: 94048,
-                    bytes_written: 39321,
+                    erases: 162,
+                    reads: 14021,
+                    writes: 6325,
+                    bytes_read: 94124,
+                    bytes_written: 39814,
                 }
             } else {
                 FlashStatsResult {
-                    erases: 149,
-                    reads: 9959,
-                    writes: 6299,
-                    bytes_read: 89616,
-                    bytes_written: 53299,
+                    erases: 150,
+                    reads: 9867,
+                    writes: 6301,
+                    bytes_read: 88892,
+                    bytes_written: 53754,
                 }
             }
         );
@@ -87,7 +87,7 @@ mod queue_tests {
     async fn run_test(cache: impl CacheImpl) -> FlashStatsResult {
         let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x00..0x400) },
+            const { QueueConfig::new(0x00..0x400, 7) },
             cache,
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -124,7 +124,7 @@ mod queue_tests {
     }
 }
 
-#[cfg(all(test, not(feature = "versioning")))]
+#[cfg(test)]
 mod map_tests {
     use crate::{
         AlignedBuf,
@@ -143,19 +143,19 @@ mod map_tests {
             run_test(NoCache::new()).await,
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
-                    erases: 432,
-                    reads: 711445,
-                    writes: 10481,
-                    bytes_read: 4521910,
-                    bytes_written: 100917,
+                    erases: 459,
+                    reads: 719637,
+                    writes: 10855,
+                    bytes_read: 4695800,
+                    bytes_written: 105655,
                 }
             } else {
                 FlashStatsResult {
-                    erases: 198,
-                    reads: 233786,
-                    writes: 5201,
-                    bytes_read: 1837101,
-                    bytes_written: 50401,
+                    erases: 409,
+                    reads: 513597,
+                    writes: 10259,
+                    bytes_read: 4549673,
+                    bytes_written: 100467,
                 }
             }
         );
@@ -167,19 +167,19 @@ mod map_tests {
             run_test(PageStateCache::<NUM_PAGES>::new()).await,
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
-                    erases: 432,
-                    reads: 625849,
-                    writes: 10481,
-                    bytes_read: 4436314,
-                    bytes_written: 100917,
+                    erases: 459,
+                    reads: 630647,
+                    writes: 10855,
+                    bytes_read: 4473325,
+                    bytes_written: 105655,
                 }
             } else {
                 FlashStatsResult {
-                    erases: 198,
-                    reads: 181162,
-                    writes: 5201,
-                    bytes_read: 1784477,
-                    bytes_written: 50401,
+                    erases: 409,
+                    reads: 428149,
+                    writes: 10259,
+                    bytes_read: 4336053,
+                    bytes_written: 100467,
                 }
             }
         );
@@ -191,19 +191,19 @@ mod map_tests {
             run_test(PagePointerCache::<NUM_PAGES>::new()).await,
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
-                    erases: 432,
-                    reads: 576962,
-                    writes: 10481,
-                    bytes_read: 4207191,
-                    bytes_written: 100917,
+                    erases: 459,
+                    reads: 582075,
+                    writes: 10855,
+                    bytes_read: 4245371,
+                    bytes_written: 105655,
                 }
             } else {
                 FlashStatsResult {
-                    erases: 198,
-                    reads: 163273,
-                    writes: 5201,
-                    bytes_read: 1641365,
-                    bytes_written: 50401,
+                    erases: 409,
+                    reads: 401986,
+                    writes: 10259,
+                    bytes_read: 4126749,
+                    bytes_written: 100467,
                 }
             }
         );
@@ -215,19 +215,19 @@ mod map_tests {
             run_test(KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await,
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
-                    erases: 432,
-                    reads: 486180,
-                    writes: 10481,
-                    bytes_read: 3545218,
-                    bytes_written: 100917,
+                    erases: 459,
+                    reads: 493406,
+                    writes: 10855,
+                    bytes_read: 3596360,
+                    bytes_written: 105655,
                 }
             } else {
                 FlashStatsResult {
-                    erases: 198,
-                    reads: 131503,
-                    writes: 5201,
-                    bytes_read: 1299275,
-                    bytes_written: 50401,
+                    erases: 409,
+                    reads: 324200,
+                    writes: 10259,
+                    bytes_read: 3330861,
+                    bytes_written: 100467,
                 }
             }
         );
@@ -239,19 +239,19 @@ mod map_tests {
             run_test(KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await,
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
-                    erases: 432,
-                    reads: 36054,
-                    writes: 10481,
-                    bytes_read: 262382,
-                    bytes_written: 100917,
+                    erases: 459,
+                    reads: 37116,
+                    writes: 10855,
+                    bytes_read: 270066,
+                    bytes_written: 105655,
                 }
             } else {
                 FlashStatsResult {
-                    erases: 198,
-                    reads: 14510,
-                    writes: 5201,
-                    bytes_read: 150592,
-                    bytes_written: 50401,
+                    erases: 409,
+                    reads: 23776,
+                    writes: 10259,
+                    bytes_read: 247302,
+                    bytes_written: 100467,
                 }
             }
         );
@@ -260,7 +260,7 @@ mod map_tests {
     async fn run_test(cache: impl KeyCacheImpl<u16>) -> FlashStatsResult {
         let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
-            const { MapConfig::new(0x00..0x400) },
+            const { MapConfig::new(0x00..0x400, 7) },
             cache,
         );
         let mut data_buffer = AlignedBuf([0; 128]);

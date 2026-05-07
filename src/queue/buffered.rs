@@ -615,7 +615,7 @@ mod tests {
 
         fn make_storage() -> QueueStorage<MockFlash, NoCache> {
             let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
-            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
+            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE, 7);
             QueueStorage::new(flash, config, NoCache::new())
         }
 
@@ -682,7 +682,7 @@ mod tests {
             // 16-byte ring: each item costs 2 (prefix) + data.len() bytes.
             // 3 items of 4 bytes = 3*6 = 18 bytes — won't all fit.
             let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
-            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
+            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE, 7);
             let storage = QueueStorage::new(flash, config, NoCache::new());
             let mut queue: BufferedQueue<MockFlash, NoCache, 16> = BufferedQueue::new(storage);
 
@@ -694,7 +694,7 @@ mod tests {
         #[test]
         fn overflow_policy_discard_oldest() {
             let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
-            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
+            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE, 7);
             let storage = QueueStorage::new(flash, config, NoCache::new());
             let mut queue: BufferedQueue<MockFlash, NoCache, 16> = BufferedQueue::new(storage);
 

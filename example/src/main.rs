@@ -25,7 +25,7 @@ async fn main(_spawner: Spawner) {
 
     let mut queue_storage = QueueStorage::new(
         flash,
-        const { QueueConfig::new(QUEUE_FLASH_RANGE) },
+        const { QueueConfig::new(QUEUE_FLASH_RANGE, 1) },
         PagePointerCache::<4>::new(),
     );
 
@@ -35,7 +35,7 @@ async fn main(_spawner: Spawner) {
 
     let mut map_storage = MapStorage::new(
         flash,
-        const { MapConfig::new(MAP_FLASH_RANGE) },
+        const { MapConfig::new(MAP_FLASH_RANGE, 1) },
         KeyPointerCache::<4, u8, 8>::new(),
     );
 

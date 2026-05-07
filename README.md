@@ -59,29 +59,25 @@ If you find yourself in trouble with this, feel free to open an issue.
   - The system is always fine or fully recoverable
 - Corrupted items are ignored
 - Optional caching to speed things up
-- Optional flash version verification
+- Built-in flash version verification
   - Detect internal flash format mismatches
   - Detect application supplied schema/version mismatches
-  - Optionally erase incompatible contents
+  - Optionally erase incompatible contents through `verify()`
 - Wear leveling
   - Pages are used cyclically, so all pages get erased an equal amount
 - Built on [`embedded-storage`](https://github.com/rust-embedded-community/embedded-storage)
   - This is the only required dependency
 
-### `versioning`
+### Version Verification
 
-The optional `versioning` feature changes the on-flash page-start layout so the crate can store and
-verify:
+The crate stores version metadata in the page-start area so it can verify:
 
 - an internal flash format version managed by this crate
 - a user supplied version number managed by the application
 
-This adds `verify(user_version, policy)` APIs to the queue and map storage types. Verification can
-either return the first mismatch it finds or erase the full configured flash range when a mismatch is
-detected.
-
-Enabling `versioning` changes the on-flash format. Data written without it is not compatible with
-data written with it enabled.
+This adds `verify(policy)` APIs to the queue and map storage types. The user supplied version is now
+part of `QueueConfig` and `MapConfig`. Verification can either return the first mismatch it finds or
+erase the full configured flash range when a mismatch is detected.
 
 If you're looking for an alternative with different tradeoffs, take a look at [ekv](https://github.com/embassy-rs/ekv).
 
@@ -147,7 +143,7 @@ If both words are `FF` (erased), then the page is open.
 If the first word is written with the marker, then the page is partial open.
 If both words are written, then the page is closed.
 
-With `versioning` enabled, the page start reservation becomes `max(word size, 4)` bytes. The first
+The page start reservation is `max(word size, 4)` bytes. The first
 byte still acts as the page-start marker. The remaining bytes store the internal flash format version
 and the user supplied version.
 

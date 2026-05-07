@@ -25,7 +25,7 @@ fn fuzz(random_data: &[u8]) {
 
     let mut storage = QueueStorage::new(
         flash,
-        const { QueueConfig::new(0..(PAGES * WORD_SIZE * WORDS_PER_PAGE) as u32) },
+        const { QueueConfig::new(0..(PAGES * WORD_SIZE * WORDS_PER_PAGE) as u32, 1) },
         NoCache::new(),
     );
     block_on(storage.print_items());

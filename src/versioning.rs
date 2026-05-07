@@ -67,24 +67,32 @@ enum PageStartStatus {
     Corrupted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct State {
+    internal_version: u8,
     user_version: u16,
 }
 
 impl State {
-    pub(crate) const fn new() -> Self {
-        Self { user_version: 0 }
+    pub(crate) const fn new(user_version: u16) -> Self {
+        Self {
+            internal_version: FLASH_FORMAT_VERSION,
+            user_version,
+        }
     }
 
-    pub(crate) fn set_user_version(&mut self, user_version: u16) {
-        self.user_version = user_version;
+    #[cfg(test)]
+    const fn with_internal_version(internal_version: u8, user_version: u16) -> Self {
+        Self {
+            internal_version,
+            user_version,
+        }
     }
 
     pub(crate) fn page_start_buffer(&self) -> AlignedBuf<MAX_WORD_SIZE> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
         buffer[PAGE_START_HEADER_MARKER_INDEX] = MARKER;
-        buffer[PAGE_START_HEADER_INTERNAL_VERSION_INDEX] = FLASH_FORMAT_VERSION;
+        buffer[PAGE_START_HEADER_INTERNAL_VERSION_INDEX] = self.internal_version;
         buffer[PAGE_START_HEADER_USER_VERSION_RANGE]
             .copy_from_slice(&self.user_version.to_le_bytes());
         buffer
@@ -175,10 +183,8 @@ pub(crate) async fn page_start_is_marked<S: NorFlash>(
 
 pub(crate) async fn verify_storage<S: NorFlash, C: CacheImpl>(
     storage: &mut GenericStorage<S, C>,
-    user_version: u16,
     policy: VersionPolicy,
 ) -> Result<(), Error<S::Error>> {
-    storage.versioning.set_user_version(user_version);
     storage.cache.invalidate_cache_state();
 
     for page_index in storage.get_pages(0) {
@@ -196,14 +202,14 @@ pub(crate) async fn verify_storage<S: NorFlash, C: CacheImpl>(
             continue;
         };
 
-        let mismatch = if actual_version.internal != FLASH_FORMAT_VERSION {
+        let mismatch = if actual_version.internal != storage.versioning.internal_version {
             Some(VersionMismatchKind::Internal {
-                expected: FLASH_FORMAT_VERSION,
+                expected: storage.versioning.internal_version,
                 actual: actual_version.internal,
             })
-        } else if actual_version.user != user_version {
+        } else if actual_version.user != storage.versioning.user_version {
             Some(VersionMismatchKind::User {
-                expected: user_version,
+                expected: storage.versioning.user_version,
                 actual: actual_version.user,
             })
         } else {
@@ -228,4 +234,9 @@ pub(crate) async fn verify_storage<S: NorFlash, C: CacheImpl>(
 #[cfg(test)]
 pub(crate) const fn flash_format_version() -> u8 {
     FLASH_FORMAT_VERSION
+}
+
+#[cfg(test)]
+pub(crate) const fn test_state_with_internal_version(internal_version: u8, user_version: u16) -> State {
+    State::with_internal_version(internal_version, user_version)
 }

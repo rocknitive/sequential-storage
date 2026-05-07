@@ -89,7 +89,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
         true,
     );
 
-    let mut storage = MapStorage::new(flash, const { MapConfig::new(0x000..0x1000) }, cache);
+    let mut storage = MapStorage::new(flash, const { MapConfig::new(0x000..0x1000, 1) }, cache);
 
     let mut map = HashMap::new();
     #[repr(align(4))]

@@ -67,7 +67,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
         Some(ops.fuel as u32),
         true,
     );
-    let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x000..0x1000) }, cache);
+    let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x000..0x1000, 1) }, cache);
 
     let mut order = VecDeque::new();
     let mut buf = AlignedBuf([0; MAX_VALUE_SIZE + 1]);

@@ -6,7 +6,6 @@ use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 
-#[cfg(feature = "versioning")]
 use super::VersionPolicy;
 use super::{
     Debug, DeletableFlash, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash,
@@ -17,6 +16,7 @@ use super::{
 /// Configuration for a queue
 pub struct QueueConfig<S> {
     flash_range: Range<u32>,
+    user_version: u16,
     _phantom: PhantomData<S>,
 }
 
@@ -24,13 +24,13 @@ impl<S: NorFlash> QueueConfig<S> {
     /// Create a new queue configuration. Will panic if the data is invalid.
     /// If you want a fallible version, use [`Self::try_new`].
     #[must_use]
-    pub const fn new(flash_range: Range<u32>) -> Self {
-        Self::try_new(flash_range).expect("Queue config must be correct")
+    pub const fn new(flash_range: Range<u32>, user_version: u16) -> Self {
+        Self::try_new(flash_range, user_version).expect("Queue config must be correct")
     }
 
     /// Create a new queue configuration. Will return None if the data is invalid
     #[must_use]
-    pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
+    pub const fn try_new(flash_range: Range<u32>, user_version: u16) -> Option<Self> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
         }
@@ -51,6 +51,7 @@ impl<S: NorFlash> QueueConfig<S> {
 
         Some(Self {
             flash_range,
+            user_version,
             _phantom: PhantomData,
         })
     }
@@ -81,7 +82,7 @@ impl<S: NorFlash> QueueConfig<S> {
 /// // Initialize the flash. This can be internal or external
 /// let mut flash = init_flash();
 ///
-/// let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x1000..0x3000) }, NoCache::new());
+/// let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x1000..0x3000, 1) }, NoCache::new());
 /// // We need to give the crate a buffer to work with.
 /// // It must be big enough to serialize the biggest value of your storage type in.
 /// let mut data_buffer = [0; 128];
@@ -129,7 +130,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                 flash: storage,
                 flash_range: config.flash_range,
                 cache,
-                versioning: super::versioning::State::new(),
+                versioning: super::versioning::State::new(config.user_version),
             },
         }
     }
@@ -552,17 +553,12 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         self.inner.erase_all()
     }
 
-    #[cfg(feature = "versioning")]
     /// Verify the on-flash version information.
     ///
     /// This checks the version metadata stored in used pages. If a mismatch is found, the behavior
     /// depends on `policy`.
-    pub async fn verify(
-        &mut self,
-        user_version: u16,
-        policy: VersionPolicy,
-    ) -> Result<(), Error<S::Error>> {
-        self.inner.verify(user_version, policy).await
+    pub async fn verify(&mut self, policy: VersionPolicy) -> Result<(), Error<S::Error>> {
+        self.inner.verify(policy).await
     }
 
     /// Get the minimal overhead size per stored item for the given flash type.
@@ -874,7 +870,7 @@ mod tests {
     async fn peek_and_overwrite_old_data() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x00..0x40) },
+            const { QueueConfig::new(0x00..0x40, 7) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -957,7 +953,7 @@ mod tests {
     async fn push_pop() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            const { QueueConfig::new(0x000..0x1000, 7) },
             NoCache::new(),
         );
 
@@ -990,7 +986,7 @@ mod tests {
     async fn iter_pop_out_of_order() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            const { QueueConfig::new(0x000..0x1000, 7) },
             NoCache::new(),
         );
 
@@ -1028,7 +1024,7 @@ mod tests {
     async fn pop_with_once_only_flash() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::OnceOnly, None, true),
-            const { QueueConfig::new(0x00..0x40) },
+            const { QueueConfig::new(0x00..0x40, 7) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1057,7 +1053,7 @@ mod tests {
     async fn push_pop_tiny() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x00..0x40) },
+            const { QueueConfig::new(0x00..0x40, 7) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1096,7 +1092,7 @@ mod tests {
     async fn push_peek_pop_many() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            const { QueueConfig::new(0x000..0x1000, 7) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1273,7 +1269,7 @@ mod tests {
     async fn push_lots_then_pop_lots() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            const { QueueConfig::new(0x000..0x1000, 7) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1370,7 +1366,7 @@ mod tests {
     async fn pop_with_empty_section() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x00..0x40) },
+            const { QueueConfig::new(0x00..0x40, 7) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1399,7 +1395,7 @@ mod tests {
     async fn search_pages() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            const { QueueConfig::new(0x000..0x1000, 7) },
             NoCache::new(),
         );
 
@@ -1415,7 +1411,7 @@ mod tests {
     async fn store_too_big_item() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            const { QueueConfig::new(0x000..0x1000, 7) },
             NoCache::new(),
         );
 
@@ -1440,7 +1436,7 @@ mod tests {
     async fn push_on_single_page() {
         let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<1, 4, 256>::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x400) },
+            const { QueueConfig::new(0x000..0x400, 7) },
             NoCache::new(),
         );
         let data = AlignedBuf([0, 1, 2, 3, 4, 0, 0, 0]);
