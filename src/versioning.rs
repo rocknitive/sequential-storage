@@ -2,7 +2,9 @@ use core::ops::Range;
 
 use embedded_storage_async::nor_flash::NorFlash;
 
-use crate::{AlignedBuf, Error, GenericStorage, MARKER, MARKER_SET_BITS, MAX_WORD_SIZE, NorFlashExt};
+use crate::{
+    AlignedBuf, Error, GenericStorage, MARKER, MARKER_SET_BITS, MAX_WORD_SIZE, NorFlashExt,
+};
 use crate::{cache::CacheImpl, calculate_page_address};
 
 const PAGE_START_HEADER_MARKER_INDEX: usize = 0;
@@ -104,7 +106,11 @@ fn marker_byte_is_set(value: u8) -> bool {
 fn decode_page_start_header(buffer: &[u8]) -> StorageVersionInfo {
     StorageVersionInfo {
         internal: buffer[PAGE_START_HEADER_INTERNAL_VERSION_INDEX],
-        user: u16::from_le_bytes(buffer[PAGE_START_HEADER_USER_VERSION_RANGE].try_into().unwrap()),
+        user: u16::from_le_bytes(
+            buffer[PAGE_START_HEADER_USER_VERSION_RANGE]
+                .try_into()
+                .unwrap(),
+        ),
     }
 }
 
@@ -128,7 +134,8 @@ async fn get_page_start_status<S: NorFlash>(
     }
 
     let marker_written = marker_byte_is_set(written[PAGE_START_HEADER_MARKER_INDEX]);
-    let version_bytes_erased = written[PAGE_START_HEADER_INTERNAL_VERSION_INDEX..PAGE_START_HEADER_SIZE]
+    let version_bytes_erased = written
+        [PAGE_START_HEADER_INTERNAL_VERSION_INDEX..PAGE_START_HEADER_SIZE]
         .iter()
         .all(|byte| *byte == u8::MAX);
     let padding_erased = written[PAGE_START_HEADER_SIZE..]
@@ -147,7 +154,9 @@ async fn get_page_start_status<S: NorFlash>(
         return Ok(PageStartStatus::Corrupted);
     }
 
-    Ok(PageStartStatus::Written(decode_page_start_header(&written[..PAGE_START_HEADER_SIZE])))
+    Ok(PageStartStatus::Written(decode_page_start_header(
+        &written[..PAGE_START_HEADER_SIZE],
+    )))
 }
 
 pub(crate) async fn page_start_is_marked<S: NorFlash>(

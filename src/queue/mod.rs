@@ -6,14 +6,13 @@ use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 
+#[cfg(feature = "versioning")]
+use super::VersionPolicy;
 use super::{
     Debug, DeletableFlash, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash,
     NorFlashExt, PageState, PhantomData, Range, cache, calculate_page_end_address,
-    calculate_page_index, calculate_page_size, item,
-    page_data_start_address, run_with_auto_repair,
+    calculate_page_index, calculate_page_size, item, page_data_start_address, run_with_auto_repair,
 };
-#[cfg(feature = "versioning")]
-use super::VersionPolicy;
 
 /// Configuration for a queue
 pub struct QueueConfig<S> {
@@ -186,7 +185,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
 
         let mut next_address = self
             .inner
-                .find_next_free_item_spot(
+            .find_next_free_item_spot(
                 current_page_data_start_address,
                 page_data_end_address,
                 data.len() as u32,
@@ -203,7 +202,8 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                 (PageState::Open, _) => {
                     self.inner.close_page(current_page).await?;
                     self.inner.partial_close_page(next_page).await?;
-                    next_address = Some(page_data_start_address::<S>(self.flash_range(), next_page));
+                    next_address =
+                        Some(page_data_start_address::<S>(self.flash_range(), next_page));
                 }
                 (PageState::Closed, _) | (PageState::PartialOpen, true) => {
                     let next_page_data_start_address =
@@ -355,7 +355,8 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         }
 
         // See how much space we can find in the current page.
-        let page_data_start_address = page_data_start_address::<S>(self.flash_range(), current_page);
+        let page_data_start_address =
+            page_data_start_address::<S>(self.flash_range(), current_page);
         let page_data_end_address =
             calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
 
@@ -885,7 +886,10 @@ mod tests {
         const DATA_SIZE: usize =
             PAGE_DATA_SIZE - QueueStorage::<MockFlashTiny, NoCache>::item_overhead_size() as usize;
 
-        assert_eq!(storage.space_left().await.unwrap(), (PAGE_DATA_SIZE * 2) as u32);
+        assert_eq!(
+            storage.space_left().await.unwrap(),
+            (PAGE_DATA_SIZE * 2) as u32
+        );
 
         assert_eq!(storage.peek(&mut data_buffer).await.unwrap(), None);
 
@@ -944,7 +948,10 @@ mod tests {
             &[0xDD; DATA_SIZE]
         );
 
-        assert_eq!(storage.space_left().await.unwrap(), (PAGE_DATA_SIZE * 2) as u32);
+        assert_eq!(
+            storage.space_left().await.unwrap(),
+            (PAGE_DATA_SIZE * 2) as u32
+        );
 
         assert_eq!(storage.peek(&mut data_buffer).await.unwrap(), None);
         assert_eq!(storage.pop(&mut data_buffer).await.unwrap(), None);

@@ -787,7 +787,9 @@ mod tests {
     type MockFlashVersioned = mock_flash::MockFlashBase<2, 1, 64>;
 
     #[cfg(feature = "versioning")]
-    fn make_versioned_storage(flash: MockFlashVersioned) -> GenericStorage<MockFlashVersioned, NoCache> {
+    fn make_versioned_storage(
+        flash: MockFlashVersioned,
+    ) -> GenericStorage<MockFlashVersioned, NoCache> {
         GenericStorage {
             flash,
             flash_range: MockFlashVersioned::FULL_FLASH_RANGE,
@@ -801,7 +803,10 @@ mod tests {
     async fn verify_accepts_erased_storage() {
         let mut storage = make_versioned_storage(MockFlashVersioned::default());
 
-        storage.verify(7, VersionPolicy::ErrorOnMismatch).await.unwrap();
+        storage
+            .verify(7, VersionPolicy::ErrorOnMismatch)
+            .await
+            .unwrap();
     }
 
     #[cfg(feature = "versioning")]
@@ -811,10 +816,15 @@ mod tests {
         write_aligned(
             &mut flash,
             0x00,
-            &[MARKER, versioning::flash_format_version().wrapping_add(1), 7, 0],
+            &[
+                MARKER,
+                versioning::flash_format_version().wrapping_add(1),
+                7,
+                0,
+            ],
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         let mut storage = make_versioned_storage(flash);
 
@@ -836,8 +846,8 @@ mod tests {
             0x00,
             &[MARKER, versioning::flash_format_version(), 9, 0],
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         let mut storage = make_versioned_storage(flash);
 
@@ -859,11 +869,14 @@ mod tests {
             0x00,
             &[MARKER, versioning::flash_format_version(), 9, 0],
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         let mut storage = make_versioned_storage(flash);
-        storage.verify(7, VersionPolicy::EraseOnMismatch).await.unwrap();
+        storage
+            .verify(7, VersionPolicy::EraseOnMismatch)
+            .await
+            .unwrap();
 
         assert!(storage.flash.as_bytes().iter().all(|byte| *byte == u8::MAX));
     }
@@ -872,9 +885,15 @@ mod tests {
     #[test]
     async fn versioned_partial_close_writes_four_byte_header_on_byte_flash() {
         let mut storage = make_versioned_storage(MockFlashVersioned::default());
-        storage.verify(7, VersionPolicy::ErrorOnMismatch).await.unwrap();
+        storage
+            .verify(7, VersionPolicy::ErrorOnMismatch)
+            .await
+            .unwrap();
 
-        assert_eq!(storage.partial_close_page(0).await.unwrap(), PageState::PartialOpen);
+        assert_eq!(
+            storage.partial_close_page(0).await.unwrap(),
+            PageState::PartialOpen
+        );
         assert_eq!(
             &storage.flash.as_bytes()[..4],
             &[MARKER, versioning::flash_format_version(), 7, 0]

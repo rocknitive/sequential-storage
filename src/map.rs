@@ -12,13 +12,13 @@ use self::{
     item::{ItemHeaderIter, ItemUnborrowed},
 };
 
-use super::{
-    Debug, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState,
-    Range, cache, calculate_page_end_address, calculate_page_index,
-    calculate_page_size, item, page_data_start_address, run_with_auto_repair,
-};
 #[cfg(feature = "versioning")]
 use super::VersionPolicy;
+use super::{
+    Debug, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState,
+    Range, cache, calculate_page_end_address, calculate_page_index, calculate_page_size, item,
+    page_data_start_address, run_with_auto_repair,
+};
 
 /// Configuration for a map
 pub struct MapConfig<S> {
@@ -787,7 +787,8 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         // We need to move the data from the next buffer page to the next_page_to_use, but only if that data
         // doesn't have a newer value somewhere else.
 
-        let mut next_page_write_address = page_data_start_address::<S>(self.flash_range(), target_page);
+        let mut next_page_write_address =
+            page_data_start_address::<S>(self.flash_range(), target_page);
 
         let mut it = ItemIter::new(
             page_data_start_address::<S>(self.flash_range(), source_page),
