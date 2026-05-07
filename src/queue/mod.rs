@@ -6,12 +6,12 @@ use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 
-use super::VersionPolicy;
 use super::{
     Debug, DeletableFlash, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash,
     NorFlashExt, PageState, PhantomData, Range, cache, calculate_page_size, item,
     run_with_auto_repair,
 };
+use super::{StorageVersion, VersionPolicy};
 
 /// Configuration for a queue
 pub struct QueueConfig<S> {
@@ -130,7 +130,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                 flash: storage,
                 flash_range: config.flash_range,
                 cache,
-                versioning: super::StorageVersion::new(config.user_version),
+                version: StorageVersion::new(config.user_version),
             },
         }
     }
@@ -174,10 +174,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         }
 
         let current_page = self.find_youngest_page().await?;
-
-        let current_page_layout = self.inner.layout().page(current_page);
-        let current_page_data_start_address = current_page_layout.data_start_address();
-        let page_data_end_address = current_page_layout.data_end_address();
+        let page = self.inner.layout().page(current_page);
 
         self.inner.partial_close_page(current_page).await?;
 
@@ -186,8 +183,8 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         let mut next_address = self
             .inner
             .find_next_free_item_spot(
-                current_page_data_start_address,
-                page_data_end_address,
+                page.data_start_address(),
+                page.data_end_address(),
                 data.len() as u32,
             )
             .await?;

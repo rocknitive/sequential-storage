@@ -2,6 +2,7 @@ use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 
 use embedded_storage_async::nor_flash::NorFlash;
 
+use crate::flash_layout::FlashLayout;
 use crate::{PageState, item::ItemHeader};
 
 pub(crate) trait PagePointersCache: Debug {
@@ -100,8 +101,7 @@ impl PagePointersCache for CachedPagePointers<'_> {
         item_address: u32,
         item_header: &ItemHeader,
     ) {
-        let page_index =
-            crate::flash_layout::FlashLayout::<S>::new(flash_range).page_index(item_address);
+        let page_index = FlashLayout::<S>::new(flash_range).page_index(item_address);
 
         let next_item_address = item_header.next_item_address::<S>(item_address);
 
@@ -123,7 +123,7 @@ impl PagePointersCache for CachedPagePointers<'_> {
         item_address: u32,
         item_header: &ItemHeader,
     ) {
-        let layout = crate::flash_layout::FlashLayout::<S>::new(flash_range.clone());
+        let layout = FlashLayout::<S>::new(flash_range.clone());
         let page_index = layout.page_index(item_address);
 
         // Either the item we point to or the first item on the page

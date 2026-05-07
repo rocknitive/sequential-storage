@@ -12,11 +12,11 @@ use self::{
     item::{ItemHeaderIter, ItemUnborrowed},
 };
 
-use super::VersionPolicy;
 use super::{
     Debug, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState,
     Range, cache, calculate_page_size, item, run_with_auto_repair,
 };
+use super::{StorageVersion, VersionPolicy};
 
 /// Configuration for a map
 pub struct MapConfig<S> {
@@ -152,7 +152,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 flash: storage,
                 flash_range: config.flash_range,
                 cache,
-                versioning: super::StorageVersion::new(config.user_version),
+                version: StorageVersion::new(config.user_version),
             },
             _phantom: PhantomData,
         }

@@ -11,7 +11,7 @@ use core::{
 #[cfg(not(feature = "tombstone"))]
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use embedded_storage_async::nor_flash::NorFlash;
-use flash_layout::{FlashPage, StorageVersion};
+use flash_layout::{FlashLayout, FlashPage, StorageVersion};
 use map::SerializationError;
 
 #[cfg(feature = "alloc")]
@@ -100,7 +100,7 @@ struct GenericStorage<S: NorFlash, C: CacheImpl> {
     flash: S,
     flash_range: Range<u32>,
     cache: C,
-    versioning: StorageVersion,
+    version: StorageVersion,
 }
 
 impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
@@ -162,8 +162,8 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         Ok(None)
     }
 
-    fn layout(&self) -> flash_layout::FlashLayout<S> {
-        flash_layout::FlashLayout::new(self.flash_range.clone())
+    fn layout(&self) -> FlashLayout<S> {
+        FlashLayout::new(self.flash_range.clone())
     }
 
     /// Get all pages in the flash range from the given start to end (that might wrap back to 0)
@@ -278,7 +278,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
 
         self.cache.notice_page_state(page_index, new_state, true);
 
-        let buffer = self.versioning.page_start_buffer();
+        let buffer = self.version.page_start_buffer();
         let page = self.layout().page(page_index);
         // Close the start marker
         self.flash
@@ -308,11 +308,11 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                 continue;
             };
 
-            if self.versioning != actual {
+            if self.version != actual {
                 return match policy {
                     VersionPolicy::ErrorOnMismatch => Err(Error::VersionMismatch {
                         actual,
-                        expected: self.versioning,
+                        expected: self.version,
                     }),
                     VersionPolicy::EraseOnMismatch => {
                         self.erase_all().await?;
@@ -428,7 +428,7 @@ const fn round_down_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
 }
 
 const fn calculate_page_size<S: NorFlash>() -> usize {
-    flash_layout::FlashLayout::<S>::new(0..S::ERASE_SIZE as u32).page_data_size()
+    FlashLayout::<S>::new(0..S::ERASE_SIZE as u32).page_data_size()
 }
 
 /// The marker being used for page states
@@ -690,7 +690,7 @@ mod tests {
             flash,
             flash_range: 0x000..0x400,
             cache: NoCache::new(),
-            versioning: StorageVersion::new(0),
+            version: StorageVersion::new(0),
         };
 
         assert_eq!(
@@ -774,7 +774,7 @@ mod tests {
             flash,
             flash_range: MockFlashVersioned::FULL_FLASH_RANGE,
             cache: NoCache::new(),
-            versioning: StorageVersion::new(7),
+            version: StorageVersion::new(7),
         }
     }
 
@@ -799,7 +799,7 @@ mod tests {
             flash,
             flash_range: MockFlashVersioned::FULL_FLASH_RANGE,
             cache: NoCache::new(),
-            versioning: StorageVersion::with_internal_version(43, 7),
+            version: StorageVersion::with_internal_version(43, 7),
         };
 
         assert_eq!(
