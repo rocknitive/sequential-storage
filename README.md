@@ -59,10 +59,28 @@ If you find yourself in trouble with this, feel free to open an issue.
   - The system is always fine or fully recoverable
 - Corrupted items are ignored
 - Optional caching to speed things up
+- Optional flash version verification
+  - Detect internal flash format mismatches
+  - Detect application supplied schema/version mismatches
+  - Optionally erase incompatible contents
 - Wear leveling
   - Pages are used cyclically, so all pages get erased an equal amount
 - Built on [`embedded-storage`](https://github.com/rust-embedded-community/embedded-storage)
   - This is the only required dependency
+
+### `versioning`
+
+The optional `versioning` feature changes the on-flash page-start layout so the crate can store and
+verify:
+
+- an internal flash format version managed by this crate
+- a user supplied version number managed by the application
+
+This adds `verify()` APIs to the queue and map storage types. Verification can either return the first
+mismatch it finds or erase the full configured flash range when a mismatch is detected.
+
+Enabling `versioning` changes the on-flash format. Data written without it is not compatible with
+data written with it enabled.
 
 If you're looking for an alternative with different tradeoffs, take a look at [ekv](https://github.com/embassy-rs/ekv).
 
@@ -127,6 +145,10 @@ The state of a page is encoded into the first and the last word of a page.
 If both words are `FF` (erased), then the page is open.
 If the first word is written with the marker, then the page is partial open.
 If both words are written, then the page is closed.
+
+With `versioning` enabled, the page start reservation becomes `max(word size, 4)` bytes. The first
+byte still acts as the page-start marker. The remaining bytes store the internal flash format version
+and the user supplied version.
 
 ### Items
 

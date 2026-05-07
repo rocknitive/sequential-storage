@@ -14,25 +14,39 @@ use self::{
 
 use super::{
     Debug, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState,
-    Range, cache, calculate_page_address, calculate_page_end_address, calculate_page_index,
-    calculate_page_size, item, run_with_auto_repair,
+    Range, cache, calculate_page_end_address, calculate_page_index,
+    calculate_page_size, item, page_data_start_address, run_with_auto_repair,
 };
+#[cfg(feature = "versioning")]
+use super::{FLASH_FORMAT_VERSION, StorageVersionInfo, VersionPolicy};
 
 /// Configuration for a map
 pub struct MapConfig<S> {
     flash_range: Range<u32>,
+    #[cfg(feature = "versioning")]
+    user_version: u16,
     _phantom: PhantomData<S>,
 }
 
 impl<S: NorFlash> MapConfig<S> {
     /// Create a new map configuration. Will panic if the data is invalid.
     /// If you want a fallible version, use [`Self::try_new`].
+    #[cfg(not(feature = "versioning"))]
     #[must_use]
     pub const fn new(flash_range: Range<u32>) -> Self {
         Self::try_new(flash_range).expect("Map config must be correct")
     }
 
+    /// Create a new map configuration. Will panic if the data is invalid.
+    /// If you want a fallible version, use [`Self::try_new`].
+    #[cfg(feature = "versioning")]
+    #[must_use]
+    pub const fn new(flash_range: Range<u32>, user_version: u16) -> Self {
+        Self::try_new(flash_range, user_version).expect("Map config must be correct")
+    }
+
     /// Create a new map configuration. Will return None if the data is invalid
+    #[cfg(not(feature = "versioning"))]
     #[must_use]
     pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
@@ -55,6 +69,34 @@ impl<S: NorFlash> MapConfig<S> {
 
         Some(Self {
             flash_range,
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Create a new map configuration. Will return None if the data is invalid
+    #[cfg(feature = "versioning")]
+    #[must_use]
+    pub const fn try_new(flash_range: Range<u32>, user_version: u16) -> Option<Self> {
+        if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
+            return None;
+        }
+        if !flash_range.end.is_multiple_of(S::ERASE_SIZE as u32) {
+            return None;
+        }
+        if flash_range.end - flash_range.start < S::ERASE_SIZE as u32 * 2 {
+            return None;
+        }
+
+        if S::ERASE_SIZE < S::WORD_SIZE * 3 {
+            return None;
+        }
+        if S::WORD_SIZE > MAX_WORD_SIZE {
+            return None;
+        }
+
+        Some(Self {
+            flash_range,
+            user_version,
             _phantom: PhantomData,
         })
     }
@@ -91,7 +133,10 @@ impl<S: NorFlash> MapConfig<S> {
 /// // We also put the config in a const block so if the config is bad we'll get a compile time error
 ///
 /// // With the generics we specify that this is a map with `u8` as the key
+/// # #[cfg(not(feature = "versioning"))]
 /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+/// # #[cfg(feature = "versioning")]
+/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000, 1) }, NoCache::new());
 ///
 /// // We need to give the crate a buffer to work with.
 /// // It must be big enough to serialize the biggest value of your storage type in,
@@ -150,6 +195,11 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 flash: storage,
                 flash_range: config.flash_range,
                 cache,
+                #[cfg(feature = "versioning")]
+                version: StorageVersionInfo {
+                    internal: FLASH_FORMAT_VERSION,
+                    user: config.user_version,
+                },
             },
             _phantom: PhantomData,
         }
@@ -294,8 +344,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
 
         loop {
             let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range(), current_page_to_check)
-                    + S::WORD_SIZE as u32;
+                page_data_start_address::<S>(self.flash_range(), current_page_to_check);
             let page_data_end_address =
                 calculate_page_end_address::<S>(self.flash_range(), current_page_to_check)
                     - S::WORD_SIZE as u32;
@@ -424,8 +473,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 // We've got to search where the free space is since the page starts with items present already
 
                 let page_data_start_address =
-                    calculate_page_address::<S>(self.flash_range(), partial_open_page)
-                        + S::WORD_SIZE as u32;
+                    page_data_start_address::<S>(self.flash_range(), partial_open_page);
                 let page_data_end_address =
                     calculate_page_end_address::<S>(self.flash_range(), partial_open_page)
                         - S::WORD_SIZE as u32;
@@ -605,7 +653,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
             }
 
             let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range(), page_index) + S::WORD_SIZE as u32;
+                page_data_start_address::<S>(self.flash_range(), page_index);
             let page_data_end_address =
                 calculate_page_end_address::<S>(self.flash_range(), page_index)
                     - S::WORD_SIZE as u32;
@@ -691,7 +739,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// # block_on(async {
     /// let mut flash = init_flash();
     ///
+    /// # #[cfg(not(feature = "versioning"))]
     /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+    /// # #[cfg(feature = "versioning")]
+    /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000, 1) }, NoCache::new());
     /// let mut data_buffer = [0; 128];
     ///
     /// // Create the iterator of map items
@@ -764,8 +815,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
             repair = self.try_repair(data_buffer).await?
         )?;
 
-        let start_address =
-            calculate_page_address::<S>(self.flash_range(), first_page) + S::WORD_SIZE as u32;
+        let start_address = page_data_start_address::<S>(self.flash_range(), first_page);
         let end_address =
             calculate_page_end_address::<S>(self.flash_range(), first_page) - S::WORD_SIZE as u32;
 
@@ -787,11 +837,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         // We need to move the data from the next buffer page to the next_page_to_use, but only if that data
         // doesn't have a newer value somewhere else.
 
-        let mut next_page_write_address =
-            calculate_page_address::<S>(self.flash_range(), target_page) + S::WORD_SIZE as u32;
+        let mut next_page_write_address = page_data_start_address::<S>(self.flash_range(), target_page);
 
         let mut it = ItemIter::new(
-            calculate_page_address::<S>(self.flash_range(), source_page) + S::WORD_SIZE as u32,
+            page_data_start_address::<S>(self.flash_range(), source_page),
             calculate_page_end_address::<S>(self.flash_range(), source_page) - S::WORD_SIZE as u32,
         );
         while let Some((item, item_address)) = it.next(&mut self.inner.flash, data_buffer).await? {
@@ -886,6 +935,15 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         self.inner.erase_all()
     }
 
+    #[cfg(feature = "versioning")]
+    /// Verify the on-flash version information.
+    ///
+    /// This checks the version metadata stored in used pages. If a mismatch is found, the behavior
+    /// depends on `policy`.
+    pub async fn verify(&mut self, policy: VersionPolicy) -> Result<(), Error<S::Error>> {
+        self.inner.verify(policy).await
+    }
+
     /// Get the minimal overhead size per stored item for the given flash type.
     ///
     /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.\
@@ -944,7 +1002,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
 /// # block_on(async {
 /// let mut flash = init_flash();
 ///
+/// # #[cfg(not(feature = "versioning"))]
 /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+/// # #[cfg(feature = "versioning")]
+/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000, 1) }, NoCache::new());
 /// let mut data_buffer = [0; 128];
 ///
 /// // Create the iterator of map items
@@ -1012,10 +1073,10 @@ impl<K: Key, S: NorFlash, C: KeyCacheImpl<K>> MapItemIter<'_, K, S, C> {
                 {
                     Ok(PageState::Closed | PageState::PartialOpen) => {
                         self.current_iter = ItemIter::new(
-                            calculate_page_address::<S>(
+                            page_data_start_address::<S>(
                                 self.storage.inner.flash_range.clone(),
                                 self.current_page_index,
-                            ) + S::WORD_SIZE as u32,
+                            ),
                             calculate_page_end_address::<S>(
                                 self.storage.inner.flash_range.clone(),
                                 self.current_page_index,
@@ -1374,6 +1435,8 @@ impl core::fmt::Display for SerializationError {
 
 #[cfg(test)]
 mod tests {
+    use core::ops::Range;
+
     use crate::{AlignedBuf, cache::NoCache, mock_flash};
 
     use super::*;
@@ -1382,11 +1445,21 @@ mod tests {
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
+    #[cfg(not(feature = "versioning"))]
+    fn map_config<S: NorFlash>(flash_range: Range<u32>) -> MapConfig<S> {
+        MapConfig::new(flash_range)
+    }
+
+    #[cfg(feature = "versioning")]
+    fn map_config<S: NorFlash>(flash_range: Range<u32>) -> MapConfig<S> {
+        MapConfig::new(flash_range, 7)
+    }
+
     #[test]
     async fn store_and_fetch() {
         let mut storage = MapStorage::<u8, _, _>::new(
             MockFlashBig::default(),
-            MapConfig::new(0x000..0x1000),
+            map_config(0x000..0x1000),
             cache::NoCache::new(),
         );
 
@@ -1491,11 +1564,15 @@ mod tests {
 
     #[test]
     async fn store_too_many_items() {
-        let upper_bound = if cfg!(feature = "tombstone") { 2 } else { 3 };
+        let upper_bound = if cfg!(feature = "tombstone") || cfg!(feature = "versioning") {
+            2
+        } else {
+            3
+        };
 
         let mut storage = MapStorage::new(
             MockFlashTiny::default(),
-            const { MapConfig::new(0x00..0x40) },
+            map_config(0x00..0x40),
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1539,7 +1616,7 @@ mod tests {
 
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
-            const { MapConfig::new(0x0000..0x1000) },
+            map_config(0x0000..0x1000),
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1581,7 +1658,7 @@ mod tests {
     async fn store_many_items_big() {
         let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<4, 1, 4096>::default(),
-            const { MapConfig::new(0x0000..0x4000) },
+            map_config(0x0000..0x4000),
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1626,7 +1703,7 @@ mod tests {
                 None,
                 true,
             ),
-            const { MapConfig::new(0x0000..0x4000) },
+            map_config(0x0000..0x4000),
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1686,7 +1763,7 @@ mod tests {
     async fn remove_item_with_once_only_flash() {
         let mut storage = MapStorage::new(
             MockFlashTiny::new(mock_flash::WriteCountCheck::OnceOnly, None, true),
-            const { MapConfig::new(0x00..0x40) },
+            map_config(0x00..0x40),
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1729,7 +1806,7 @@ mod tests {
                 None,
                 true,
             ),
-            const { MapConfig::new(0x0000..0x4000) },
+            map_config(0x0000..0x4000),
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1774,7 +1851,7 @@ mod tests {
     async fn store_too_big_item() {
         let mut storage = MapStorage::new(
             MockFlashBig::new(mock_flash::WriteCountCheck::Twice, None, true),
-            const { MapConfig::new(0x000..0x1000) },
+            map_config(0x000..0x1000),
             NoCache::new(),
         );
 
@@ -1801,7 +1878,7 @@ mod tests {
         const UPPER_BOUND: u8 = 64;
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
-            const { MapConfig::new(0x000..0x1000) },
+            map_config(0x000..0x1000),
             NoCache::new(),
         );
 
@@ -1852,7 +1929,7 @@ mod tests {
     async fn store_unit_key() {
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
-            const { MapConfig::new(0x000..0x1000) },
+            map_config(0x000..0x1000),
             NoCache::new(),
         );
 

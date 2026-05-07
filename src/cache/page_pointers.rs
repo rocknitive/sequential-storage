@@ -2,9 +2,7 @@ use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 
 use embedded_storage_async::nor_flash::NorFlash;
 
-use crate::{
-    NorFlashExt, PageState, calculate_page_address, calculate_page_index, item::ItemHeader,
-};
+use crate::{PageState, calculate_page_index, item::ItemHeader, page_data_start_address};
 
 pub(crate) trait PagePointersCache: Debug {
     fn first_item_after_erased(&self, page_index: usize) -> Option<u32>;
@@ -127,9 +125,9 @@ impl PagePointersCache for CachedPagePointers<'_> {
         let page_index = calculate_page_index::<S>(flash_range.clone(), item_address);
 
         // Either the item we point to or the first item on the page
-        let next_unerased_item = self.first_item_after_erased(page_index).unwrap_or_else(|| {
-            calculate_page_address::<S>(flash_range, page_index) + S::WORD_SIZE as u32
-        });
+        let next_unerased_item = self
+            .first_item_after_erased(page_index)
+            .unwrap_or_else(|| page_data_start_address::<S>(flash_range, page_index));
 
         if item_address == next_unerased_item {
             if let Some(after_erased_pointer) = self.after_erased_pointers.get_mut(page_index) {

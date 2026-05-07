@@ -50,6 +50,9 @@ shared-ram-ring = ["dep:embassy-sync"]
 # Reserve an extra flash word per item and use it as a tombstone marker for deletion.
 # This relaxes deletion APIs from MultiwriteNorFlash to NorFlash, but changes the on-flash format.
 tombstone = []
+# Add explicit page version metadata to detect flash format and user schema mismatches.
+# This changes the on-flash format.
+versioning = []
 
 # Internal feature. Do not use. Anything here is semver exempt.
 _test = ["dep:futures", "dep:approx", "std", "arrayvec", "alloc", "heapless"]
