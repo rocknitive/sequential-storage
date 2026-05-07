@@ -1395,15 +1395,11 @@ mod tests {
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
-    fn map_config<S: NorFlash>(flash_range: Range<u32>) -> MapConfig<S> {
-        MapConfig::new(flash_range)
-    }
-
     #[test]
     async fn store_and_fetch() {
         let mut storage = MapStorage::<u8, _, _>::new(
             MockFlashBig::default(),
-            map_config(0x000..0x1000),
+            MapConfig::new(0x000..0x1000),
             cache::NoCache::new(),
         );
 
@@ -1508,15 +1504,11 @@ mod tests {
 
     #[test]
     async fn store_too_many_items() {
-        let upper_bound = if cfg!(feature = "tombstone") || cfg!(feature = "versioning") {
-            2
-        } else {
-            3
-        };
+        let upper_bound = if cfg!(feature = "tombstone") { 2 } else { 3 };
 
         let mut storage = MapStorage::new(
             MockFlashTiny::default(),
-            map_config(0x00..0x40),
+            const { MapConfig::new(0x00..0x40) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1560,7 +1552,7 @@ mod tests {
 
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
-            map_config(0x0000..0x1000),
+            const { MapConfig::new(0x0000..0x1000) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1602,7 +1594,7 @@ mod tests {
     async fn store_many_items_big() {
         let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<4, 1, 4096>::default(),
-            map_config(0x0000..0x4000),
+            const { MapConfig::new(0x0000..0x4000) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1647,7 +1639,7 @@ mod tests {
                 None,
                 true,
             ),
-            map_config(0x0000..0x4000),
+            const { MapConfig::new(0x0000..0x4000) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1707,7 +1699,7 @@ mod tests {
     async fn remove_item_with_once_only_flash() {
         let mut storage = MapStorage::new(
             MockFlashTiny::new(mock_flash::WriteCountCheck::OnceOnly, None, true),
-            map_config(0x00..0x40),
+            const { MapConfig::new(0x00..0x40) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1750,7 +1742,7 @@ mod tests {
                 None,
                 true,
             ),
-            map_config(0x0000..0x4000),
+            const { MapConfig::new(0x0000..0x4000) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1795,7 +1787,7 @@ mod tests {
     async fn store_too_big_item() {
         let mut storage = MapStorage::new(
             MockFlashBig::new(mock_flash::WriteCountCheck::Twice, None, true),
-            map_config(0x000..0x1000),
+            const { MapConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
 
@@ -1822,7 +1814,7 @@ mod tests {
         const UPPER_BOUND: u8 = 64;
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
-            map_config(0x000..0x1000),
+            const { MapConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
 
@@ -1873,7 +1865,7 @@ mod tests {
     async fn store_unit_key() {
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
-            map_config(0x000..0x1000),
+            const { MapConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
 

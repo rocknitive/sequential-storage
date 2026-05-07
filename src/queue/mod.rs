@@ -870,15 +870,11 @@ mod tests {
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
-    fn queue_config<S: NorFlash>(flash_range: Range<u32>) -> QueueConfig<S> {
-        QueueConfig::new(flash_range)
-    }
-
     #[test]
     async fn peek_and_overwrite_old_data() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x00..0x40),
+            const { QueueConfig::new(0x00..0x40) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -961,7 +957,7 @@ mod tests {
     async fn push_pop() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x000..0x1000),
+            const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
 
@@ -994,7 +990,7 @@ mod tests {
     async fn iter_pop_out_of_order() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x000..0x1000),
+            const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
 
@@ -1032,7 +1028,7 @@ mod tests {
     async fn pop_with_once_only_flash() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::OnceOnly, None, true),
-            queue_config(0x00..0x40),
+            const { QueueConfig::new(0x00..0x40) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1061,7 +1057,7 @@ mod tests {
     async fn push_pop_tiny() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x00..0x40),
+            const { QueueConfig::new(0x00..0x40) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1100,7 +1096,7 @@ mod tests {
     async fn push_peek_pop_many() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x000..0x1000),
+            const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1277,7 +1273,7 @@ mod tests {
     async fn push_lots_then_pop_lots() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x000..0x1000),
+            const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1374,7 +1370,7 @@ mod tests {
     async fn pop_with_empty_section() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x00..0x40),
+            const { QueueConfig::new(0x00..0x40) },
             NoCache::new(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1403,7 +1399,7 @@ mod tests {
     async fn search_pages() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x000..0x1000),
+            const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
 
@@ -1419,7 +1415,7 @@ mod tests {
     async fn store_too_big_item() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x000..0x1000),
+            const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
 
@@ -1444,7 +1440,7 @@ mod tests {
     async fn push_on_single_page() {
         let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<1, 4, 256>::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x000..0x400),
+            const { QueueConfig::new(0x000..0x400) },
             NoCache::new(),
         );
         let data = AlignedBuf([0, 1, 2, 3, 4, 0, 0, 0]);
