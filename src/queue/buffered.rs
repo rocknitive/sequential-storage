@@ -613,19 +613,9 @@ mod tests {
         // 4 pages × 64 words × 4 bytes/word = 1 KiB flash
         type MockFlash = MockFlashBase<4, 4, 64>;
 
-        #[cfg(not(feature = "versioning"))]
-        fn queue_config() -> QueueConfig<MockFlash> {
-            QueueConfig::new(MockFlash::FULL_FLASH_RANGE)
-        }
-
-        #[cfg(feature = "versioning")]
-        fn queue_config() -> QueueConfig<MockFlash> {
-            QueueConfig::new(MockFlash::FULL_FLASH_RANGE, 7)
-        }
-
         fn make_storage() -> QueueStorage<MockFlash, NoCache> {
             let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
-            let config = queue_config();
+            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
             QueueStorage::new(flash, config, NoCache::new())
         }
 
@@ -692,7 +682,7 @@ mod tests {
             // 16-byte ring: each item costs 2 (prefix) + data.len() bytes.
             // 3 items of 4 bytes = 3*6 = 18 bytes — won't all fit.
             let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
-            let config = queue_config();
+            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
             let storage = QueueStorage::new(flash, config, NoCache::new());
             let mut queue: BufferedQueue<MockFlash, NoCache, 16> = BufferedQueue::new(storage);
 
@@ -704,7 +694,7 @@ mod tests {
         #[test]
         fn overflow_policy_discard_oldest() {
             let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
-            let config = queue_config();
+            let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
             let storage = QueueStorage::new(flash, config, NoCache::new());
             let mut queue: BufferedQueue<MockFlash, NoCache, 16> = BufferedQueue::new(storage);
 

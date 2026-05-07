@@ -18,35 +18,23 @@ use super::{
     calculate_page_size, item, page_data_start_address, run_with_auto_repair,
 };
 #[cfg(feature = "versioning")]
-use super::{FLASH_FORMAT_VERSION, StorageVersionInfo, VersionPolicy};
+use super::VersionPolicy;
 
 /// Configuration for a map
 pub struct MapConfig<S> {
     flash_range: Range<u32>,
-    #[cfg(feature = "versioning")]
-    user_version: u16,
     _phantom: PhantomData<S>,
 }
 
 impl<S: NorFlash> MapConfig<S> {
     /// Create a new map configuration. Will panic if the data is invalid.
     /// If you want a fallible version, use [`Self::try_new`].
-    #[cfg(not(feature = "versioning"))]
     #[must_use]
     pub const fn new(flash_range: Range<u32>) -> Self {
         Self::try_new(flash_range).expect("Map config must be correct")
     }
 
-    /// Create a new map configuration. Will panic if the data is invalid.
-    /// If you want a fallible version, use [`Self::try_new`].
-    #[cfg(feature = "versioning")]
-    #[must_use]
-    pub const fn new(flash_range: Range<u32>, user_version: u16) -> Self {
-        Self::try_new(flash_range, user_version).expect("Map config must be correct")
-    }
-
     /// Create a new map configuration. Will return None if the data is invalid
-    #[cfg(not(feature = "versioning"))]
     #[must_use]
     pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
@@ -69,34 +57,6 @@ impl<S: NorFlash> MapConfig<S> {
 
         Some(Self {
             flash_range,
-            _phantom: PhantomData,
-        })
-    }
-
-    /// Create a new map configuration. Will return None if the data is invalid
-    #[cfg(feature = "versioning")]
-    #[must_use]
-    pub const fn try_new(flash_range: Range<u32>, user_version: u16) -> Option<Self> {
-        if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
-            return None;
-        }
-        if !flash_range.end.is_multiple_of(S::ERASE_SIZE as u32) {
-            return None;
-        }
-        if flash_range.end - flash_range.start < S::ERASE_SIZE as u32 * 2 {
-            return None;
-        }
-
-        if S::ERASE_SIZE < S::WORD_SIZE * 3 {
-            return None;
-        }
-        if S::WORD_SIZE > MAX_WORD_SIZE {
-            return None;
-        }
-
-        Some(Self {
-            flash_range,
-            user_version,
             _phantom: PhantomData,
         })
     }
@@ -133,10 +93,7 @@ impl<S: NorFlash> MapConfig<S> {
 /// // We also put the config in a const block so if the config is bad we'll get a compile time error
 ///
 /// // With the generics we specify that this is a map with `u8` as the key
-/// # #[cfg(not(feature = "versioning"))]
 /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
-/// # #[cfg(feature = "versioning")]
-/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000, 1) }, NoCache::new());
 ///
 /// // We need to give the crate a buffer to work with.
 /// // It must be big enough to serialize the biggest value of your storage type in,
@@ -195,11 +152,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 flash: storage,
                 flash_range: config.flash_range,
                 cache,
-                #[cfg(feature = "versioning")]
-                version: StorageVersionInfo {
-                    internal: FLASH_FORMAT_VERSION,
-                    user: config.user_version,
-                },
+                versioning: super::versioning::State::new(),
             },
             _phantom: PhantomData,
         }
@@ -739,10 +692,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// # block_on(async {
     /// let mut flash = init_flash();
     ///
-    /// # #[cfg(not(feature = "versioning"))]
     /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
-    /// # #[cfg(feature = "versioning")]
-    /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000, 1) }, NoCache::new());
     /// let mut data_buffer = [0; 128];
     ///
     /// // Create the iterator of map items
@@ -940,8 +890,12 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     ///
     /// This checks the version metadata stored in used pages. If a mismatch is found, the behavior
     /// depends on `policy`.
-    pub async fn verify(&mut self, policy: VersionPolicy) -> Result<(), Error<S::Error>> {
-        self.inner.verify(policy).await
+    pub async fn verify(
+        &mut self,
+        user_version: u16,
+        policy: VersionPolicy,
+    ) -> Result<(), Error<S::Error>> {
+        self.inner.verify(user_version, policy).await
     }
 
     /// Get the minimal overhead size per stored item for the given flash type.
@@ -1002,10 +956,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
 /// # block_on(async {
 /// let mut flash = init_flash();
 ///
-/// # #[cfg(not(feature = "versioning"))]
 /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
-/// # #[cfg(feature = "versioning")]
-/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000, 1) }, NoCache::new());
 /// let mut data_buffer = [0; 128];
 ///
 /// // Create the iterator of map items
@@ -1435,8 +1386,6 @@ impl core::fmt::Display for SerializationError {
 
 #[cfg(test)]
 mod tests {
-    use core::ops::Range;
-
     use crate::{AlignedBuf, cache::NoCache, mock_flash};
 
     use super::*;
@@ -1445,14 +1394,8 @@ mod tests {
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
-    #[cfg(not(feature = "versioning"))]
     fn map_config<S: NorFlash>(flash_range: Range<u32>) -> MapConfig<S> {
         MapConfig::new(flash_range)
-    }
-
-    #[cfg(feature = "versioning")]
-    fn map_config<S: NorFlash>(flash_range: Range<u32>) -> MapConfig<S> {
-        MapConfig::new(flash_range, 7)
     }
 
     #[test]

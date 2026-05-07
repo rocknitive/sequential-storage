@@ -1,7 +1,5 @@
 #[cfg(all(test, not(feature = "versioning")))]
 mod queue_tests {
-    use core::ops::Range;
-
     use crate::{
         AlignedBuf,
         cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
@@ -13,20 +11,6 @@ mod queue_tests {
 
     const NUM_PAGES: usize = 4;
     const LOOP_COUNT: usize = 2000;
-
-    #[cfg(not(feature = "versioning"))]
-    fn queue_config<S: embedded_storage_async::nor_flash::NorFlash>(
-        flash_range: Range<u32>,
-    ) -> QueueConfig<S> {
-        QueueConfig::new(flash_range)
-    }
-
-    #[cfg(feature = "versioning")]
-    fn queue_config<S: embedded_storage_async::nor_flash::NorFlash>(
-        flash_range: Range<u32>,
-    ) -> QueueConfig<S> {
-        QueueConfig::new(flash_range, 7)
-    }
 
     #[test]
     async fn no_cache() {
@@ -103,7 +87,7 @@ mod queue_tests {
     async fn run_test(cache: impl CacheImpl) -> FlashStatsResult {
         let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
-            queue_config(0x00..0x400),
+            const { QueueConfig::new(0x00..0x400) },
             cache,
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -142,8 +126,6 @@ mod queue_tests {
 
 #[cfg(all(test, not(feature = "versioning")))]
 mod map_tests {
-    use core::ops::Range;
-
     use crate::{
         AlignedBuf,
         cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
@@ -154,20 +136,6 @@ mod map_tests {
     use futures_test::test;
 
     const NUM_PAGES: usize = 4;
-
-    #[cfg(not(feature = "versioning"))]
-    fn map_config<S: embedded_storage_async::nor_flash::NorFlash>(
-        flash_range: Range<u32>,
-    ) -> MapConfig<S> {
-        MapConfig::new(flash_range)
-    }
-
-    #[cfg(feature = "versioning")]
-    fn map_config<S: embedded_storage_async::nor_flash::NorFlash>(
-        flash_range: Range<u32>,
-    ) -> MapConfig<S> {
-        MapConfig::new(flash_range, 7)
-    }
 
     #[test]
     async fn no_cache() {
@@ -292,7 +260,7 @@ mod map_tests {
     async fn run_test(cache: impl KeyCacheImpl<u16>) -> FlashStatsResult {
         let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
-            map_config(0x00..0x400),
+            const { MapConfig::new(0x00..0x400) },
             cache,
         );
         let mut data_buffer = AlignedBuf([0; 128]);

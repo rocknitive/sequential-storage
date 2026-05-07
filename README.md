@@ -76,8 +76,9 @@ verify:
 - an internal flash format version managed by this crate
 - a user supplied version number managed by the application
 
-This adds `verify()` APIs to the queue and map storage types. Verification can either return the first
-mismatch it finds or erase the full configured flash range when a mismatch is detected.
+This adds `verify(user_version, policy)` APIs to the queue and map storage types. Verification can
+either return the first mismatch it finds or erase the full configured flash range when a mismatch is
+detected.
 
 Enabling `versioning` changes the on-flash format. Data written without it is not compatible with
 data written with it enabled.
