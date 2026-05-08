@@ -281,6 +281,19 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         }
     }
 
+    /// Count all non-erased items currently stored in the queue.
+    ///
+    /// This scans item headers only and does not read or validate item payloads, so it is faster
+    /// than iterating through the queue data. Because payload integrity is not checked, this count
+    /// may diverge from the number of entries returned by [`Self::iter`] if corrupted items with
+    /// intact-looking headers are present.
+    pub async fn count(&mut self) -> Result<usize, Error<S::Error>> {
+        run_with_auto_repair!(
+            function = self.inner.count_items().await,
+            repair = self.try_repair().await?
+        )
+    }
+
     /// Pop the oldest data from the queue.
     ///
     /// If you don't want to remove the data use [`Self::peek`].
@@ -860,6 +873,77 @@ mod tests {
 
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
+
+    #[test]
+    async fn count_empty_queue() {
+        let mut storage = QueueStorage::new(
+            MockFlashBig::new(WriteCountCheck::Twice, None, true),
+            const { QueueConfig::new(0x000..0x1000, 7) },
+            NoCache::new(),
+        );
+
+        assert_eq!(storage.count().await.unwrap(), 0);
+    }
+
+    #[test]
+    async fn count_tracks_pushes_and_pops() {
+        let mut storage = QueueStorage::new(
+            MockFlashBig::new(WriteCountCheck::Twice, None, true),
+            const { QueueConfig::new(0x000..0x1000, 7) },
+            NoCache::new(),
+        );
+        let mut data_buffer = AlignedBuf([0; 1024]);
+        let one = AlignedBuf(*b"one");
+        let two = AlignedBuf(*b"two");
+        let three = AlignedBuf(*b"three");
+
+        assert_eq!(storage.count().await.unwrap(), 0);
+
+        storage.push(&one[..], false).await.unwrap();
+        storage.push(&two[..], false).await.unwrap();
+        storage.push(&three[..], false).await.unwrap();
+        assert_eq!(storage.count().await.unwrap(), 3);
+
+        assert_eq!(storage.pop(&mut data_buffer).await.unwrap().unwrap(), b"one");
+        assert_eq!(storage.count().await.unwrap(), 2);
+
+        assert_eq!(storage.pop(&mut data_buffer).await.unwrap().unwrap(), b"two");
+        assert_eq!(storage.count().await.unwrap(), 1);
+
+        assert_eq!(storage.pop(&mut data_buffer).await.unwrap().unwrap(), b"three");
+        assert_eq!(storage.count().await.unwrap(), 0);
+    }
+
+    #[test]
+    async fn count_tracks_overwritten_items() {
+        let mut storage = QueueStorage::new(
+            MockFlashTiny::new(WriteCountCheck::Twice, None, true),
+            const { QueueConfig::new(0x00..0x40, 7) },
+            NoCache::new(),
+        );
+        let mut data_buffer = AlignedBuf([0; 1024]);
+        const PAGE_DATA_SIZE: usize = calculate_page_size::<MockFlashTiny>();
+        const DATA_SIZE: usize =
+            PAGE_DATA_SIZE - QueueStorage::<MockFlashTiny, NoCache>::item_overhead_size() as usize;
+
+        data_buffer[..DATA_SIZE].copy_from_slice(&[0xAA; DATA_SIZE]);
+        storage
+            .push(&data_buffer[..DATA_SIZE], false)
+            .await
+            .unwrap();
+        assert_eq!(storage.count().await.unwrap(), 1);
+
+        data_buffer[..DATA_SIZE].copy_from_slice(&[0xBB; DATA_SIZE]);
+        storage
+            .push(&data_buffer[..DATA_SIZE], false)
+            .await
+            .unwrap();
+        assert_eq!(storage.count().await.unwrap(), 2);
+
+        data_buffer[..DATA_SIZE].copy_from_slice(&[0xCC; DATA_SIZE]);
+        storage.push(&data_buffer[..DATA_SIZE], true).await.unwrap();
+        assert_eq!(storage.count().await.unwrap(), 2);
+    }
 
     #[test]
     async fn peek_and_overwrite_old_data() {

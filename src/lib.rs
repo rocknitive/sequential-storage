@@ -127,6 +127,29 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         item::ItemHeader::data_address::<S>(0)
     }
 
+    /// Count all non-erased item headers in the configured flash range.
+    ///
+    /// This scans item headers only and does not read or validate item payloads.
+    /// As a result, corrupted items with intact-looking headers may still be counted.
+    pub async fn count_items(&mut self) -> Result<usize, Error<S::Error>> {
+        let mut count = 0;
+
+        for page_index in self.get_pages(0) {
+            let page = self.layout().page(page_index);
+            let page_data_start = page.data_start_address();
+            let page_data_end = page.data_end_address();
+
+            let mut it = item::ItemHeaderIter::new(page_data_start, page_data_end);
+            while let (Some(header), _) = it.next(&mut self.flash).await? {
+                if !header.erased {
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
     async fn try_general_repair(&mut self) -> Result<(), Error<S::Error>> {
         // Loop through the pages and get their state. If one returns the corrupted error,
         // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
