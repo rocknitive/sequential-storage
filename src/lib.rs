@@ -504,7 +504,9 @@ pub enum Error<S> {
     },
     /// The storage version information in flash does not match the expected values.
     VersionMismatch {
+        /// The expected storage version
         expected: StorageVersion,
+        /// The actual storage version read from flash
         actual: StorageVersion,
     },
     /// A provided buffer was to big to be used
