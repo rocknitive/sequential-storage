@@ -9,8 +9,8 @@ use core::{
     ops::{Deref, DerefMut, Range},
 };
 #[cfg(not(feature = "tombstone"))]
-use embedded_storage_async::nor_flash::MultiwriteNorFlash;
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage::nor_flash::MultiwriteNorFlash;
+use embedded_storage::nor_flash::NorFlash;
 use flash_layout::{FlashLayout, FlashPage, StorageVersion};
 use map::SerializationError;
 
@@ -71,11 +71,10 @@ fn marker_byte_is_set(value: u8) -> bool {
     value.count_zeros() >= MARKER_SET_BITS
 }
 
-async fn marker_is_set<S: NorFlash>(flash: &mut S, offset: u32) -> Result<bool, Error<S::Error>> {
+fn marker_is_set<S: NorFlash>(flash: &mut S, offset: u32) -> Result<bool, Error<S::Error>> {
     let mut buffer = [0; MAX_WORD_SIZE];
     flash
         .read(offset, &mut buffer[..S::READ_SIZE])
-        .await
         .map_err(|e| Error::Storage {
             value: e,
             #[cfg(feature = "_test")]
@@ -107,10 +106,9 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     /// Resets the flash in the entire given flash range.
     ///
     /// This is just a thin helper function as it just calls the flash's erase function.
-    pub async fn erase_all(&mut self) -> Result<(), Error<S::Error>> {
+    pub fn erase_all(&mut self) -> Result<(), Error<S::Error>> {
         self.flash
             .erase(self.flash_range.start, self.flash_range.end)
-            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
@@ -131,7 +129,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     ///
     /// This scans item headers only and does not read or validate item payloads.
     /// As a result, corrupted items with intact-looking headers may still be counted.
-    pub async fn count_items(&mut self) -> Result<usize, Error<S::Error>> {
+    pub fn count_items(&mut self) -> Result<usize, Error<S::Error>> {
         let mut count = 0;
 
         for page_index in self.get_pages(0) {
@@ -140,7 +138,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
             let page_data_end = page.data_end_address();
 
             let mut it = item::ItemHeaderIter::new(page_data_start, page_data_end);
-            while let (Some(header), _) = it.next(&mut self.flash).await? {
+            while let (Some(header), _) = it.next(&mut self.flash)? {
                 if !header.erased {
                     count += 1;
                 }
@@ -150,15 +148,15 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         Ok(count)
     }
 
-    async fn try_general_repair(&mut self) -> Result<(), Error<S::Error>> {
+    fn try_general_repair(&mut self) -> Result<(), Error<S::Error>> {
         // Loop through the pages and get their state. If one returns the corrupted error,
         // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
         for page_index in self.get_pages(0) {
             if matches!(
-                self.get_page_state(page_index).await,
+                self.get_page_state(page_index),
                 Err(Error::Corrupted { .. })
             ) {
-                self.open_page(page_index).await?;
+                self.open_page(page_index)?;
             }
         }
 
@@ -171,13 +169,13 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     /// Find the first page that is in the given page state.
     ///
     /// The search starts at `starting_page_index` (and wraps around back to 0 if required)
-    async fn find_first_page(
+    fn find_first_page(
         &mut self,
         starting_page_index: usize,
         page_state: PageState,
     ) -> Result<Option<usize>, Error<S::Error>> {
         for page_index in self.layout().pages_from(starting_page_index) {
-            if page_state == self.get_page_state(page_index).await? {
+            if page_state == self.get_page_state(page_index)? {
                 return Ok(Some(page_index));
             }
         }
@@ -208,14 +206,14 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     }
 
     /// Get the state of the page located at the given index
-    async fn get_page_state(&mut self, page_index: usize) -> Result<PageState, Error<S::Error>> {
+    fn get_page_state(&mut self, page_index: usize) -> Result<PageState, Error<S::Error>> {
         if let Some(cached_page_state) = self.cache.get_page_state(page_index) {
             return Ok(cached_page_state);
         }
 
         let page = self.layout().page(page_index);
-        let start_marked = page.start_is_marked(&mut self.flash).await?;
-        let end_marked = page.end_is_marked(&mut self.flash).await?;
+        let start_marked = page.start_is_marked(&mut self.flash)?;
+        let end_marked = page.end_is_marked(&mut self.flash)?;
 
         let discovered_state = match (start_marked, end_marked) {
             (true, true) => PageState::Closed,
@@ -238,7 +236,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     }
 
     /// Erase the page to open it again
-    async fn open_page(&mut self, page_index: usize) -> Result<(), Error<S::Error>> {
+    fn open_page(&mut self, page_index: usize) -> Result<(), Error<S::Error>> {
         self.cache
             .notice_page_state(page_index, PageState::Open, true);
 
@@ -246,7 +244,6 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
 
         self.flash
             .erase(page.start_address(), page.end_address())
-            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
@@ -257,8 +254,8 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     }
 
     /// Fully closes a page by writing both the start and end marker
-    async fn close_page(&mut self, page_index: usize) -> Result<(), Error<S::Error>> {
-        let current_state = self.partial_close_page(page_index).await?;
+    fn close_page(&mut self, page_index: usize) -> Result<(), Error<S::Error>> {
+        let current_state = self.partial_close_page(page_index)?;
 
         if current_state != PageState::PartialOpen {
             return Ok(());
@@ -273,7 +270,6 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         // Close the end marker
         self.flash
             .write(page_end_address, &buffer[..S::WORD_SIZE])
-            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
@@ -284,11 +280,8 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     }
 
     /// Partially close a page by writing the start marker
-    async fn partial_close_page(
-        &mut self,
-        page_index: usize,
-    ) -> Result<PageState, Error<S::Error>> {
-        let current_state = self.get_page_state(page_index).await?;
+    fn partial_close_page(&mut self, page_index: usize) -> Result<PageState, Error<S::Error>> {
+        let current_state = self.get_page_state(page_index)?;
 
         if current_state != PageState::Open {
             return Ok(current_state);
@@ -309,7 +302,6 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                 page.start_marker_address(),
                 &buffer[..FlashPage::<S>::start_marker_size()],
             )
-            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
@@ -319,12 +311,12 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         Ok(new_state)
     }
 
-    async fn verify(&mut self, policy: VersionPolicy) -> Result<(), Error<S::Error>> {
+    fn verify(&mut self, policy: VersionPolicy) -> Result<(), Error<S::Error>> {
         self.cache.invalidate_cache_state();
 
         for page_index in self.get_pages(0) {
             let page = self.layout().page(page_index);
-            let start_status = page.get_page_start_status(&mut self.flash).await?;
+            let start_status = page.get_page_start_status(&mut self.flash)?;
 
             let Some(actual) = start_status else {
                 // page is empty
@@ -338,7 +330,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                         expected: self.version,
                     }),
                     VersionPolicy::EraseOnMismatch => {
-                        self.erase_all().await?;
+                        self.erase_all()?;
                         self.cache.invalidate_cache_state();
                         Ok(())
                     }
@@ -351,7 +343,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
 
     #[cfg(any(test, feature = "std"))]
     /// Print all items in flash to the returned string
-    pub async fn print_items(&mut self) -> String {
+    pub fn print_items(&mut self) -> String {
         use std::fmt::Write;
 
         let mut buf = [0; 1024 * 16];
@@ -364,7 +356,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
             writeln!(
                 s,
                 "  Page {page_index} ({}):",
-                match self.get_page_state(page_index).await {
+                match self.get_page_state(page_index) {
                     Ok(value) => format!("{value:?}"),
                     Err(e) => format!("Error ({e:?})"),
                 }
@@ -376,13 +368,15 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
 
             let mut it = item::ItemHeaderIter::new(page_data_start, page_data_end);
             while let (Some(header), item_address) =
-                it.traverse(&mut self.flash, |_, _| false).await.unwrap()
+                it.traverse(&mut self.flash, |_, _| false).unwrap()
             {
                 let next_item_address = header.next_item_address::<S>(item_address);
-                let maybe_item = match header
-                    .read_item(&mut self.flash, &mut buf, item_address, page_data_end)
-                    .await
-                {
+                let maybe_item = match header.read_item(
+                    &mut self.flash,
+                    &mut buf,
+                    item_address,
+                    page_data_end,
+                ) {
                     Ok(maybe_item) => maybe_item,
                     Err(e) => {
                         writeln!(
@@ -668,22 +662,20 @@ mod tests {
 
     use super::*;
     use crate::flash_layout::FLASH_FORMAT_VERSION;
-    use futures_test::test;
-
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
 
-    async fn write_aligned<S: NorFlash>(
+    fn write_aligned<S: NorFlash>(
         flash: &mut S,
         offset: u32,
         bytes: &[u8],
     ) -> Result<(), S::Error> {
         let mut buf = AlignedBuf([0; 256]);
         buf[..bytes.len()].copy_from_slice(bytes);
-        flash.write(offset, &buf[..bytes.len()]).await
+        flash.write(offset, &buf[..bytes.len()])
     }
 
     #[test]
-    async fn test_find_pages() {
+    fn test_find_pages() {
         // Page setup:
         // 0: closed
         // 1: closed
@@ -693,23 +685,13 @@ mod tests {
         let mut flash = MockFlash::default();
 
         // Page 0 markers
-        write_aligned(&mut flash, 0x000, &[MARKER, 0, 0, 0])
-            .await
-            .unwrap();
-        write_aligned(&mut flash, 0x100 - 4, &[0, 0, 0, MARKER])
-            .await
-            .unwrap();
+        write_aligned(&mut flash, 0x000, &[MARKER, 0, 0, 0]).unwrap();
+        write_aligned(&mut flash, 0x100 - 4, &[0, 0, 0, MARKER]).unwrap();
         // Page 1 markers
-        write_aligned(&mut flash, 0x100, &[MARKER, 0, 0, 0])
-            .await
-            .unwrap();
-        write_aligned(&mut flash, 0x200 - 4, &[0, 0, 0, MARKER])
-            .await
-            .unwrap();
+        write_aligned(&mut flash, 0x100, &[MARKER, 0, 0, 0]).unwrap();
+        write_aligned(&mut flash, 0x200 - 4, &[0, 0, 0, MARKER]).unwrap();
         // Page 2 markers
-        write_aligned(&mut flash, 0x200, &[MARKER, 0, 0, 0])
-            .await
-            .unwrap();
+        write_aligned(&mut flash, 0x200, &[MARKER, 0, 0, 0]).unwrap();
 
         let mut storage = GenericStorage {
             flash,
@@ -719,71 +701,56 @@ mod tests {
         };
 
         assert_eq!(
-            storage.find_first_page(0, PageState::Open).await.unwrap(),
+            storage.find_first_page(0, PageState::Open).unwrap(),
             Some(3)
         );
         assert_eq!(
-            storage
-                .find_first_page(0, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            storage.find_first_page(0, PageState::PartialOpen).unwrap(),
             Some(2)
         );
         assert_eq!(
-            storage
-                .find_first_page(1, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            storage.find_first_page(1, PageState::PartialOpen).unwrap(),
             Some(2)
         );
         assert_eq!(
-            storage
-                .find_first_page(2, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            storage.find_first_page(2, PageState::PartialOpen).unwrap(),
             Some(2)
         );
         assert_eq!(
-            storage.find_first_page(3, PageState::Open).await.unwrap(),
+            storage.find_first_page(3, PageState::Open).unwrap(),
             Some(3)
         );
 
         storage.flash_range = 0x000..0x200;
         assert_eq!(
-            storage
-                .find_first_page(0, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            storage.find_first_page(0, PageState::PartialOpen).unwrap(),
             None
         );
         storage.flash_range = 0x000..0x400;
 
         assert_eq!(
-            storage.find_first_page(0, PageState::Closed).await.unwrap(),
+            storage.find_first_page(0, PageState::Closed).unwrap(),
             Some(0)
         );
         assert_eq!(
-            storage.find_first_page(1, PageState::Closed).await.unwrap(),
+            storage.find_first_page(1, PageState::Closed).unwrap(),
             Some(1)
         );
         assert_eq!(
-            storage.find_first_page(2, PageState::Closed).await.unwrap(),
+            storage.find_first_page(2, PageState::Closed).unwrap(),
             Some(0)
         );
         assert_eq!(
-            storage.find_first_page(3, PageState::Closed).await.unwrap(),
+            storage.find_first_page(3, PageState::Closed).unwrap(),
             Some(0)
         );
 
         storage.flash_range = 0x200..0x400;
-        assert_eq!(
-            storage.find_first_page(0, PageState::Closed).await.unwrap(),
-            None
-        );
+        assert_eq!(storage.find_first_page(0, PageState::Closed).unwrap(), None);
     }
 
     #[test]
-    async fn read_write_sizes() {
+    fn read_write_sizes() {
         assert_read_write_sizes(1, 1);
         assert_read_write_sizes(1, 4);
         assert_read_write_sizes(4, 4);
@@ -804,21 +771,16 @@ mod tests {
     }
 
     #[test]
-    async fn verify_accepts_erased_storage() {
+    fn verify_accepts_erased_storage() {
         let mut storage = make_versioned_storage(MockFlashVersioned::default());
 
-        storage
-            .verify(VersionPolicy::ErrorOnMismatch)
-            .await
-            .unwrap();
+        storage.verify(VersionPolicy::ErrorOnMismatch).unwrap();
     }
 
     #[test]
-    async fn verify_reports_internal_version_mismatch() {
+    fn verify_reports_internal_version_mismatch() {
         let mut flash = MockFlashVersioned::default();
-        write_aligned(&mut flash, 0x00, &[MARKER, 42, 7, 0])
-            .await
-            .unwrap();
+        write_aligned(&mut flash, 0x00, &[MARKER, 42, 7, 0]).unwrap();
 
         let mut storage = GenericStorage {
             flash,
@@ -828,7 +790,7 @@ mod tests {
         };
 
         assert_eq!(
-            storage.verify(VersionPolicy::ErrorOnMismatch).await,
+            storage.verify(VersionPolicy::ErrorOnMismatch),
             Err(Error::VersionMismatch {
                 expected: StorageVersion::new(7),
                 actual: StorageVersion::with_internal_version(43, 7),
@@ -837,16 +799,14 @@ mod tests {
     }
 
     #[test]
-    async fn verify_reports_user_version_mismatch() {
+    fn verify_reports_user_version_mismatch() {
         let mut flash = MockFlashVersioned::default();
-        write_aligned(&mut flash, 0x00, &[MARKER, FLASH_FORMAT_VERSION, 9, 0])
-            .await
-            .unwrap();
+        write_aligned(&mut flash, 0x00, &[MARKER, FLASH_FORMAT_VERSION, 9, 0]).unwrap();
 
         let mut storage = make_versioned_storage(flash);
 
         assert_eq!(
-            storage.verify(VersionPolicy::ErrorOnMismatch).await,
+            storage.verify(VersionPolicy::ErrorOnMismatch),
             Err(Error::VersionMismatch {
                 expected: StorageVersion::new(9),
                 actual: StorageVersion::new(7),
@@ -855,27 +815,22 @@ mod tests {
     }
 
     #[test]
-    async fn verify_erase_policy_clears_mismatched_storage() {
+    fn verify_erase_policy_clears_mismatched_storage() {
         let mut flash = MockFlashVersioned::default();
-        write_aligned(&mut flash, 0x00, &[MARKER, FLASH_FORMAT_VERSION, 9, 0])
-            .await
-            .unwrap();
+        write_aligned(&mut flash, 0x00, &[MARKER, FLASH_FORMAT_VERSION, 9, 0]).unwrap();
 
         let mut storage = make_versioned_storage(flash);
-        storage
-            .verify(VersionPolicy::EraseOnMismatch)
-            .await
-            .unwrap();
+        storage.verify(VersionPolicy::EraseOnMismatch).unwrap();
 
         assert!(storage.flash.as_bytes().iter().all(|byte| *byte == u8::MAX));
     }
 
     #[test]
-    async fn versioned_partial_close_writes_four_byte_header_on_byte_flash() {
+    fn versioned_partial_close_writes_four_byte_header_on_byte_flash() {
         let mut storage = make_versioned_storage(MockFlashVersioned::default());
 
         assert_eq!(
-            storage.partial_close_page(0).await.unwrap(),
+            storage.partial_close_page(0).unwrap(),
             PageState::PartialOpen
         );
         assert_eq!(

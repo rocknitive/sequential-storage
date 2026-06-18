@@ -67,7 +67,6 @@ impl<S: NorFlash> QueueConfig<S> {
 /// # use sequential_storage::cache::NoCache;
 /// # use sequential_storage::queue::{QueueConfig, QueueStorage};
 /// # use mock_flash::MockFlashBase;
-/// # use futures::executor::block_on;
 /// # type Flash = MockFlashBase<10, 1, 4096>;
 /// # mod mock_flash {
 /// #   include!("../mock_flash.rs");
@@ -76,8 +75,6 @@ impl<S: NorFlash> QueueConfig<S> {
 /// # fn init_flash() -> Flash {
 /// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
 /// # }
-/// #
-/// # block_on(async {
 ///
 /// // Initialize the flash. This can be internal or external
 /// let mut flash = init_flash();
@@ -90,29 +87,28 @@ impl<S: NorFlash> QueueConfig<S> {
 /// let my_data = [10, 47, 29];
 ///
 /// // We can push some data to the queue
-/// storage.push(&my_data, false).await.unwrap();
+/// storage.push(&my_data, false).unwrap();
 ///
 /// // We can peek at the oldest data
 ///
 /// assert_eq!(
-///     &storage.peek(&mut data_buffer).await.unwrap().unwrap()[..],
+///     &storage.peek(&mut data_buffer).unwrap().unwrap()[..],
 ///     &my_data[..]
 /// );
 ///
 /// // With popping we get back the oldest data, but that data is now also removed
 ///
 /// assert_eq!(
-///     &storage.pop(&mut data_buffer).await.unwrap().unwrap()[..],
+///     &storage.pop(&mut data_buffer).unwrap().unwrap()[..],
 ///     &my_data[..]
 /// );
 ///
 /// // If we pop again, we find there's no data anymore
 ///
 /// assert_eq!(
-///     storage.pop(&mut data_buffer).await,
+///     storage.pop(&mut data_buffer),
 ///     Ok(None)
 /// );
-/// # });
 /// ```
 pub struct QueueStorage<S: NorFlash, C: CacheImpl> {
     inner: GenericStorage<S, C>,
@@ -143,18 +139,18 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     ///
     /// *Note: If a page is already used and you push more data than the remaining capacity of the page,
     /// the entire remaining capacity will go unused because the data is stored on the next page.*
-    pub async fn push(
+    pub fn push(
         &mut self,
         data: &[u8],
         allow_overwrite_old_data: bool,
     ) -> Result<(), Error<S::Error>> {
         run_with_auto_repair!(
-            function = self.push_inner(data, allow_overwrite_old_data).await,
-            repair = self.try_repair().await?
+            function = self.push_inner(data, allow_overwrite_old_data),
+            repair = self.try_repair()?
         )
     }
 
-    async fn push_inner(
+    fn push_inner(
         &mut self,
         data: &[u8],
         allow_overwrite_old_data: bool,
@@ -173,32 +169,29 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
             return Err(Error::ItemTooBig);
         }
 
-        let current_page = self.find_youngest_page().await?;
+        let current_page = self.find_youngest_page()?;
         let page = self.inner.layout().page(current_page);
 
-        self.inner.partial_close_page(current_page).await?;
+        self.inner.partial_close_page(current_page)?;
 
         // Find the last item on the page so we know where we need to write
 
-        let mut next_address = self
-            .inner
-            .find_next_free_item_spot(
-                page.data_start_address(),
-                page.data_end_address(),
-                data.len() as u32,
-            )
-            .await?;
+        let mut next_address = self.inner.find_next_free_item_spot(
+            page.data_start_address(),
+            page.data_end_address(),
+            data.len() as u32,
+        )?;
 
         if next_address.is_none() {
             // No cap left on this page, move to the next page
             let next_page = self.inner.next_page(current_page);
-            let next_page_state = self.inner.get_page_state(next_page).await?;
+            let next_page_state = self.inner.get_page_state(next_page)?;
             let single_page = next_page == current_page;
 
             match (next_page_state, single_page) {
                 (PageState::Open, _) => {
-                    self.inner.close_page(current_page).await?;
-                    self.inner.partial_close_page(next_page).await?;
+                    self.inner.close_page(current_page)?;
+                    self.inner.partial_close_page(next_page)?;
                     next_address = Some(self.inner.layout().page(next_page).data_start_address());
                 }
                 (PageState::Closed, _) | (PageState::PartialOpen, true) => {
@@ -206,20 +199,17 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                         self.inner.layout().page(next_page).data_start_address();
 
                     if !allow_overwrite_old_data
-                        && !self
-                            .inner
-                            .is_page_empty(next_page, Some(next_page_state))
-                            .await?
+                        && !self.inner.is_page_empty(next_page, Some(next_page_state))?
                     {
                         self.inner.cache.unmark_dirty();
                         return Err(Error::FullStorage);
                     }
 
-                    self.inner.open_page(next_page).await?;
+                    self.inner.open_page(next_page)?;
                     if !single_page {
-                        self.inner.close_page(current_page).await?;
+                        self.inner.close_page(current_page)?;
                     }
-                    self.inner.partial_close_page(next_page).await?;
+                    self.inner.partial_close_page(next_page)?;
                     next_address = Some(next_page_data_start_address);
                 }
                 (PageState::PartialOpen, false) => {
@@ -238,8 +228,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
             &mut self.inner.cache,
             next_address.unwrap(),
             data,
-        )
-        .await?;
+        )?;
 
         self.inner.cache.unmark_dirty();
         Ok(())
@@ -251,9 +240,9 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// The iteration happens non-destructively, or in other words it peeks at every item.
     /// The returned entry has a [`QueueIteratorEntry::pop`] function with which you can decide to pop the item
     /// after you've seen the contents.
-    pub async fn iter(&mut self) -> Result<QueueIterator<'_, S, C>, Error<S::Error>> {
+    pub fn iter(&mut self) -> Result<QueueIterator<'_, S, C>, Error<S::Error>> {
         // Note: Corruption repair is done in these functions already
-        QueueIterator::new(self).await
+        QueueIterator::new(self)
     }
 
     /// Peek at the oldest data.
@@ -266,14 +255,14 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// You should not depend on that data.
     ///
     /// If the data buffer is not big enough an error is returned.
-    pub async fn peek<'d>(
+    pub fn peek<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
         // Note: Corruption repair is done in these functions already
-        let mut iterator = self.iter().await?;
+        let mut iterator = self.iter()?;
 
-        let next_value = iterator.next(data_buffer).await?;
+        let next_value = iterator.next(data_buffer)?;
 
         match next_value {
             Some(entry) => Ok(Some(entry.into_buf())),
@@ -287,10 +276,10 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// than iterating through the queue data. Because payload integrity is not checked, this count
     /// may diverge from the number of entries returned by [`Self::iter`] if corrupted items with
     /// intact-looking headers are present.
-    pub async fn count(&mut self) -> Result<usize, Error<S::Error>> {
+    pub fn count(&mut self) -> Result<usize, Error<S::Error>> {
         run_with_auto_repair!(
-            function = self.inner.count_items().await,
-            repair = self.try_repair().await?
+            function = self.inner.count_items(),
+            repair = self.try_repair()?
         )
     }
 
@@ -304,19 +293,19 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// You should not depend on that data.
     ///
     /// If the data buffer is not big enough an error is returned.
-    pub async fn pop<'d>(
+    pub fn pop<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
     where
         S: DeletableFlash,
     {
-        let mut iterator = self.iter().await?;
+        let mut iterator = self.iter()?;
 
-        let next_value = iterator.next(data_buffer).await?;
+        let next_value = iterator.next(data_buffer)?;
 
         match next_value {
-            Some(entry) => Ok(Some(entry.pop().await?)),
+            Some(entry) => Ok(Some(entry.pop()?)),
             None => Ok(None),
         }
     }
@@ -327,25 +316,25 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// data that can be stored, taking alignment requirements of the item into account.
     ///
     /// If there is no space left, `None` is returned.
-    pub async fn find_max_fit(&mut self) -> Result<Option<u32>, Error<S::Error>> {
+    pub fn find_max_fit(&mut self) -> Result<Option<u32>, Error<S::Error>> {
         run_with_auto_repair!(
-            function = self.find_max_fit_inner().await,
-            repair = self.try_repair().await?
+            function = self.find_max_fit_inner(),
+            repair = self.try_repair()?
         )
     }
 
-    async fn find_max_fit_inner(&mut self) -> Result<Option<u32>, Error<S::Error>> {
+    fn find_max_fit_inner(&mut self) -> Result<Option<u32>, Error<S::Error>> {
         if self.inner.cache.is_dirty() {
             self.inner.cache.invalidate_cache_state();
         }
 
-        let current_page = self.find_youngest_page().await?;
+        let current_page = self.find_youngest_page()?;
 
         // Check if we have space on the next page
         let next_page = self.inner.next_page(current_page);
-        match self.inner.get_page_state(next_page).await? {
+        match self.inner.get_page_state(next_page)? {
             state @ PageState::Closed => {
-                if self.inner.is_page_empty(next_page, Some(state)).await? {
+                if self.inner.is_page_empty(next_page, Some(state))? {
                     self.inner.cache.unmark_dirty();
                     return Ok(Some(calculate_page_size::<S>() as u32));
                 }
@@ -378,8 +367,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                         .unwrap_or(page_data_start_address),
                     page_data_end_address,
                 )
-                .traverse(&mut self.inner.flash, |_, _| true)
-                .await?
+                .traverse(&mut self.inner.flash, |_, _| true)?
                 .1
             }
         };
@@ -399,14 +387,14 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// the current page is closed and the item is stored on the next page, 'wasting' the 50 you had.
     ///
     /// So unless you're tracking all this, the returned number should only be used as a rough indication.
-    pub async fn space_left(&mut self) -> Result<u32, Error<S::Error>> {
+    pub fn space_left(&mut self) -> Result<u32, Error<S::Error>> {
         run_with_auto_repair!(
-            function = self.space_left_inner().await,
-            repair = self.try_repair().await?
+            function = self.space_left_inner(),
+            repair = self.try_repair()?
         )
     }
 
-    async fn space_left_inner(&mut self) -> Result<u32, Error<S::Error>> {
+    fn space_left_inner(&mut self) -> Result<u32, Error<S::Error>> {
         if self.inner.cache.is_dirty() {
             self.inner.cache.invalidate_cache_state();
         }
@@ -414,8 +402,8 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         let mut total_free_space = 0;
 
         for page in self.inner.get_pages(0) {
-            let state = self.inner.get_page_state(page).await?;
-            let page_empty = self.inner.is_page_empty(page, Some(state)).await?;
+            let state = self.inner.get_page_state(page)?;
+            let page_empty = self.inner.is_page_empty(page, Some(state))?;
 
             if state.is_closed() && !page_empty {
                 continue;
@@ -442,8 +430,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                             .unwrap_or(page_data_start_address),
                         page_data_end_address,
                     )
-                    .traverse(&mut self.inner.flash, |_, _| true)
-                    .await?
+                    .traverse(&mut self.inner.flash, |_, _| true)?
                     .1
                 }
             };
@@ -454,11 +441,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                 // No data fits on this partial open page anymore.
                 // So if all data on this is already erased, then this page might as well be counted as empty.
                 // We can use [is_page_empty] and lie to to it so it checks the items.
-                if self
-                    .inner
-                    .is_page_empty(page, Some(PageState::Closed))
-                    .await?
-                {
+                if self.inner.is_page_empty(page, Some(PageState::Closed))? {
                     total_free_space += page_data_end_address - page_data_start_address;
                     continue;
                 }
@@ -471,24 +454,21 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         Ok(total_free_space)
     }
 
-    async fn find_youngest_page(&mut self) -> Result<usize, Error<S::Error>> {
-        let last_used_page = self
-            .inner
-            .find_first_page(0, PageState::PartialOpen)
-            .await?;
+    fn find_youngest_page(&mut self) -> Result<usize, Error<S::Error>> {
+        let last_used_page = self.inner.find_first_page(0, PageState::PartialOpen)?;
 
         if let Some(last_used_page) = last_used_page {
             return Ok(last_used_page);
         }
 
         // We have no partial open page. Search for a closed page to anker ourselves to
-        let first_closed_page = self.inner.find_first_page(0, PageState::Closed).await?;
+        let first_closed_page = self.inner.find_first_page(0, PageState::Closed)?;
 
         let first_open_page = match first_closed_page {
             Some(anchor) => {
                 // We have at least one closed page
                 // The first one after is the page we need to use
-                self.inner.find_first_page(anchor, PageState::Open).await?
+                self.inner.find_first_page(anchor, PageState::Open)?
             }
             None => {
                 // No closed pages and no partial open pages, so all pages should be open
@@ -508,14 +488,13 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         })
     }
 
-    async fn find_oldest_page(&mut self) -> Result<usize, Error<S::Error>> {
-        let youngest_page = self.find_youngest_page().await?;
+    fn find_oldest_page(&mut self) -> Result<usize, Error<S::Error>> {
+        let youngest_page = self.find_youngest_page()?;
 
         // The oldest page is the first non-open page after the youngest page
         let oldest_closed_page = self
             .inner
-            .find_first_page(youngest_page, PageState::Closed)
-            .await?;
+            .find_first_page(youngest_page, PageState::Closed)?;
 
         Ok(oldest_closed_page.unwrap_or(youngest_page))
     }
@@ -530,19 +509,19 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// If this function or the function call after this crate returns [`Error::Corrupted`], then it's unlikely
     /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
     /// erase the flash range.
-    async fn try_repair(&mut self) -> Result<(), Error<S::Error>> {
+    fn try_repair(&mut self) -> Result<(), Error<S::Error>> {
         self.inner.cache.invalidate_cache_state();
 
-        self.inner.try_general_repair().await?;
+        self.inner.try_general_repair()?;
         Ok(())
     }
 
-    async fn find_start_address(&mut self) -> Result<NextAddress, Error<S::Error>> {
+    fn find_start_address(&mut self) -> Result<NextAddress, Error<S::Error>> {
         if self.inner.cache.is_dirty() {
             self.inner.cache.invalidate_cache_state();
         }
 
-        let oldest_page = self.find_oldest_page().await?;
+        let oldest_page = self.find_oldest_page()?;
 
         // We start at the start of the oldest page
         let current_address = match self.inner.cache.first_item_after_erased(oldest_page) {
@@ -556,7 +535,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// Resets the flash in the entire given flash range.
     ///
     /// This is just a thin helper function as it just calls the flash's erase function.
-    pub fn erase_all(&mut self) -> impl Future<Output = Result<(), Error<S::Error>>> {
+    pub fn erase_all(&mut self) -> Result<(), Error<S::Error>> {
         self.inner.erase_all()
     }
 
@@ -564,8 +543,8 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     ///
     /// This checks the version metadata stored in used pages. If a mismatch is found, the behavior
     /// depends on `policy`.
-    pub async fn verify(&mut self, policy: VersionPolicy) -> Result<(), Error<S::Error>> {
-        self.inner.verify(policy).await
+    pub fn verify(&mut self, policy: VersionPolicy) -> Result<(), Error<S::Error>> {
+        self.inner.verify(policy)
     }
 
     /// Get the minimal overhead size per stored item for the given flash type.
@@ -598,7 +577,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// Print all items in flash to the returned string
     ///
     /// This is meant as a debugging utility. The string format is not stable.
-    pub fn print_items(&mut self) -> impl Future<Output = String> {
+    pub fn print_items(&mut self) -> String {
         self.inner.print_items()
     }
 }
@@ -633,10 +612,10 @@ enum NextAddress {
 }
 
 impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
-    async fn new(storage: &'s mut QueueStorage<S, C>) -> Result<Self, Error<S::Error>> {
+    fn new(storage: &'s mut QueueStorage<S, C>) -> Result<Self, Error<S::Error>> {
         let start_address = run_with_auto_repair!(
-            function = storage.find_start_address().await,
-            repair = storage.try_repair().await?
+            function = storage.find_start_address(),
+            repair = storage.try_repair()?
         )?;
 
         let oldest_page = match start_address {
@@ -657,7 +636,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
     /// If there are no more entries, None is returned.
     ///
     /// The `data_buffer` has to be large enough to be able to hold the largest item in flash.
-    pub async fn next<'d, 'q>(
+    pub fn next<'d, 'q>(
         &'q mut self,
         data_buffer: &'d mut [u8],
     ) -> Result<Option<QueueIteratorEntry<'s, 'd, 'q, S, C>>, Error<S::Error>> {
@@ -668,8 +647,8 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
         }
 
         let value = run_with_auto_repair!(
-            function = self.next_inner(data_buffer).await,
-            repair = self.storage.try_repair().await?
+            function = self.next_inner(data_buffer),
+            repair = self.storage.try_repair()?
         );
 
         match value {
@@ -686,7 +665,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
         }
     }
 
-    async fn next_inner(
+    fn next_inner(
         &mut self,
         data_buffer: &mut [u8],
     ) -> Result<Option<(ItemUnborrowed, u32)>, Error<S::Error>> {
@@ -699,12 +678,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
             let (current_page, current_address) = match self.next_address {
                 NextAddress::PageAfter(previous_page) => {
                     let next_page = self.storage.inner.next_page(previous_page);
-                    if self
-                        .storage
-                        .inner
-                        .get_page_state(next_page)
-                        .await?
-                        .is_open()
+                    if self.storage.inner.get_page_state(next_page)?.is_open()
                         || next_page == self.oldest_page
                     {
                         self.storage.inner.cache.unmark_dirty();
@@ -715,7 +689,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
                     // If we know all those items were popped, we can proactively open the previous page
                     // This is amazing for performance
                     if self.previous_item_states == PreviousItemStates::AllPopped {
-                        self.storage.inner.open_page(previous_page).await?;
+                        self.storage.inner.open_page(previous_page)?;
                     }
 
                     let current_address = self
@@ -744,18 +718,15 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
             // No need to worry about cache here since that has been dealt with at the creation of this iterator
-            if let (Some(found_item_header), found_item_address) = it
-                .traverse(&mut self.storage.inner.flash, |header, _| header.erased)
-                .await?
+            if let (Some(found_item_header), found_item_address) =
+                it.traverse(&mut self.storage.inner.flash, |header, _| header.erased)?
             {
-                let maybe_item = found_item_header
-                    .read_item(
-                        &mut self.storage.inner.flash,
-                        data_buffer,
-                        found_item_address,
-                        page_data_end_address,
-                    )
-                    .await?;
+                let maybe_item = found_item_header.read_item(
+                    &mut self.storage.inner.flash,
+                    data_buffer,
+                    found_item_address,
+                    page_data_end_address,
+                )?;
 
                 match maybe_item {
                     item::MaybeItem::Corrupted(header, _) => {
@@ -829,7 +800,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
 
     /// Pop the data in flash that corresponds to this entry. This makes it so
     /// future peeks won't find this data anymore.
-    pub async fn pop(self) -> Result<&'d mut [u8], Error<S::Error>>
+    pub fn pop(self) -> Result<&'d mut [u8], Error<S::Error>>
     where
         S: DeletableFlash,
     {
@@ -840,14 +811,12 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
             self.iter.previous_item_states = PreviousItemStates::AllPopped;
         }
 
-        header
-            .erase_data(
-                &mut self.iter.storage.inner.flash,
-                self.iter.storage.inner.flash_range.clone(),
-                &mut self.iter.storage.inner.cache,
-                self.address,
-            )
-            .await?;
+        header.erase_data(
+            &mut self.iter.storage.inner.flash,
+            self.iter.storage.inner.flash_range.clone(),
+            &mut self.iter.storage.inner.cache,
+            self.address,
+        )?;
 
         self.iter.storage.inner.cache.unmark_dirty();
         Ok(item_data_buffer)
@@ -869,24 +838,22 @@ mod tests {
     };
 
     use super::*;
-    use futures_test::test;
-
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
     #[test]
-    async fn count_empty_queue() {
+    fn count_empty_queue() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000, 7) },
             NoCache::new(),
         );
 
-        assert_eq!(storage.count().await.unwrap(), 0);
+        assert_eq!(storage.count().unwrap(), 0);
     }
 
     #[test]
-    async fn count_tracks_pushes_and_pops() {
+    fn count_tracks_pushes_and_pops() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000, 7) },
@@ -897,25 +864,25 @@ mod tests {
         let two = AlignedBuf(*b"two");
         let three = AlignedBuf(*b"three");
 
-        assert_eq!(storage.count().await.unwrap(), 0);
+        assert_eq!(storage.count().unwrap(), 0);
 
-        storage.push(&one[..], false).await.unwrap();
-        storage.push(&two[..], false).await.unwrap();
-        storage.push(&three[..], false).await.unwrap();
-        assert_eq!(storage.count().await.unwrap(), 3);
+        storage.push(&one[..], false).unwrap();
+        storage.push(&two[..], false).unwrap();
+        storage.push(&three[..], false).unwrap();
+        assert_eq!(storage.count().unwrap(), 3);
 
-        assert_eq!(storage.pop(&mut data_buffer).await.unwrap().unwrap(), b"one");
-        assert_eq!(storage.count().await.unwrap(), 2);
+        assert_eq!(storage.pop(&mut data_buffer).unwrap().unwrap(), b"one");
+        assert_eq!(storage.count().unwrap(), 2);
 
-        assert_eq!(storage.pop(&mut data_buffer).await.unwrap().unwrap(), b"two");
-        assert_eq!(storage.count().await.unwrap(), 1);
+        assert_eq!(storage.pop(&mut data_buffer).unwrap().unwrap(), b"two");
+        assert_eq!(storage.count().unwrap(), 1);
 
-        assert_eq!(storage.pop(&mut data_buffer).await.unwrap().unwrap(), b"three");
-        assert_eq!(storage.count().await.unwrap(), 0);
+        assert_eq!(storage.pop(&mut data_buffer).unwrap().unwrap(), b"three");
+        assert_eq!(storage.count().unwrap(), 0);
     }
 
     #[test]
-    async fn count_tracks_overwritten_items() {
+    fn count_tracks_overwritten_items() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40, 7) },
@@ -927,26 +894,20 @@ mod tests {
             PAGE_DATA_SIZE - QueueStorage::<MockFlashTiny, NoCache>::item_overhead_size() as usize;
 
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xAA; DATA_SIZE]);
-        storage
-            .push(&data_buffer[..DATA_SIZE], false)
-            .await
-            .unwrap();
-        assert_eq!(storage.count().await.unwrap(), 1);
+        storage.push(&data_buffer[..DATA_SIZE], false).unwrap();
+        assert_eq!(storage.count().unwrap(), 1);
 
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xBB; DATA_SIZE]);
-        storage
-            .push(&data_buffer[..DATA_SIZE], false)
-            .await
-            .unwrap();
-        assert_eq!(storage.count().await.unwrap(), 2);
+        storage.push(&data_buffer[..DATA_SIZE], false).unwrap();
+        assert_eq!(storage.count().unwrap(), 2);
 
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xCC; DATA_SIZE]);
-        storage.push(&data_buffer[..DATA_SIZE], true).await.unwrap();
-        assert_eq!(storage.count().await.unwrap(), 2);
+        storage.push(&data_buffer[..DATA_SIZE], true).unwrap();
+        assert_eq!(storage.count().unwrap(), 2);
     }
 
     #[test]
-    async fn peek_and_overwrite_old_data() {
+    fn peek_and_overwrite_old_data() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40, 7) },
@@ -957,79 +918,64 @@ mod tests {
         const DATA_SIZE: usize =
             PAGE_DATA_SIZE - QueueStorage::<MockFlashTiny, NoCache>::item_overhead_size() as usize;
 
-        assert_eq!(
-            storage.space_left().await.unwrap(),
-            (PAGE_DATA_SIZE * 2) as u32
-        );
+        assert_eq!(storage.space_left().unwrap(), (PAGE_DATA_SIZE * 2) as u32);
 
-        assert_eq!(storage.peek(&mut data_buffer).await.unwrap(), None);
+        assert_eq!(storage.peek(&mut data_buffer).unwrap(), None);
 
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xAA; DATA_SIZE]);
-        storage
-            .push(&data_buffer[..DATA_SIZE], false)
-            .await
-            .unwrap();
+        storage.push(&data_buffer[..DATA_SIZE], false).unwrap();
 
-        assert_eq!(storage.space_left().await.unwrap(), PAGE_DATA_SIZE as u32);
+        assert_eq!(storage.space_left().unwrap(), PAGE_DATA_SIZE as u32);
 
         assert_eq!(
-            storage.peek(&mut data_buffer).await.unwrap().unwrap(),
+            storage.peek(&mut data_buffer).unwrap().unwrap(),
             &[0xAA; DATA_SIZE]
         );
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xBB; DATA_SIZE]);
-        storage
-            .push(&data_buffer[..DATA_SIZE], false)
-            .await
-            .unwrap();
+        storage.push(&data_buffer[..DATA_SIZE], false).unwrap();
 
-        assert_eq!(storage.space_left().await.unwrap(), 0);
+        assert_eq!(storage.space_left().unwrap(), 0);
 
         assert_eq!(
-            storage.peek(&mut data_buffer).await.unwrap().unwrap(),
+            storage.peek(&mut data_buffer).unwrap().unwrap(),
             &[0xAA; DATA_SIZE]
         );
 
         // Flash is full, this should fail
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xCC; DATA_SIZE]);
-        storage
-            .push(&data_buffer[..DATA_SIZE], false)
-            .await
-            .unwrap_err();
+        storage.push(&data_buffer[..DATA_SIZE], false).unwrap_err();
         // Now we allow overwrite, so it should work
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xDD; DATA_SIZE]);
-        storage.push(&data_buffer[..DATA_SIZE], true).await.unwrap();
+        storage.push(&data_buffer[..DATA_SIZE], true).unwrap();
 
         assert_eq!(
-            storage.peek(&mut data_buffer).await.unwrap().unwrap(),
+            storage.peek(&mut data_buffer).unwrap().unwrap(),
             &[0xBB; DATA_SIZE]
         );
         assert_eq!(
-            storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+            storage.pop(&mut data_buffer).unwrap().unwrap(),
             &[0xBB; DATA_SIZE]
         );
 
-        assert_eq!(storage.space_left().await.unwrap(), PAGE_DATA_SIZE as u32);
+        assert_eq!(storage.space_left().unwrap(), PAGE_DATA_SIZE as u32);
 
         assert_eq!(
-            storage.peek(&mut data_buffer).await.unwrap().unwrap(),
+            storage.peek(&mut data_buffer).unwrap().unwrap(),
             &[0xDD; DATA_SIZE]
         );
         assert_eq!(
-            storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+            storage.pop(&mut data_buffer).unwrap().unwrap(),
             &[0xDD; DATA_SIZE]
         );
 
-        assert_eq!(
-            storage.space_left().await.unwrap(),
-            (PAGE_DATA_SIZE * 2) as u32
-        );
+        assert_eq!(storage.space_left().unwrap(), (PAGE_DATA_SIZE * 2) as u32);
 
-        assert_eq!(storage.peek(&mut data_buffer).await.unwrap(), None);
-        assert_eq!(storage.pop(&mut data_buffer).await.unwrap(), None);
+        assert_eq!(storage.peek(&mut data_buffer).unwrap(), None);
+        assert_eq!(storage.pop(&mut data_buffer).unwrap(), None);
     }
 
     #[test]
-    async fn push_pop() {
+    fn push_pop() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000, 7) },
@@ -1042,27 +988,23 @@ mod tests {
             println!("{i}");
             let data = vec![i as u8; i % 512 + 1];
 
-            storage.push(&data, true).await.unwrap();
+            storage.push(&data, true).unwrap();
             assert_eq!(
-                storage.peek(&mut data_buffer).await.unwrap().unwrap(),
+                storage.peek(&mut data_buffer).unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
             assert_eq!(
-                storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+                storage.pop(&mut data_buffer).unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
-            assert_eq!(
-                storage.peek(&mut data_buffer).await.unwrap(),
-                None,
-                "At {i}"
-            );
+            assert_eq!(storage.peek(&mut data_buffer).unwrap(), None, "At {i}");
         }
     }
 
     #[test]
-    async fn iter_pop_out_of_order() {
+    fn iter_pop_out_of_order() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000, 7) },
@@ -1075,23 +1017,23 @@ mod tests {
         const COUNT: usize = 20;
 
         for i in 0..COUNT {
-            storage.push(&gen_data(i), false).await.unwrap();
+            storage.push(&gen_data(i), false).unwrap();
         }
 
-        let mut iterator = storage.iter().await.unwrap();
+        let mut iterator = storage.iter().unwrap();
         let mut i = 0;
-        while let Some(entry) = iterator.next(&mut data_buffer).await.unwrap() {
+        while let Some(entry) = iterator.next(&mut data_buffer).unwrap() {
             if i % 2 == 1 {
-                assert_eq!(entry.pop().await.unwrap(), gen_data(i));
+                assert_eq!(entry.pop().unwrap(), gen_data(i));
             }
 
             i += 1;
         }
         assert_eq!(i, COUNT);
 
-        let mut iterator = storage.iter().await.unwrap();
+        let mut iterator = storage.iter().unwrap();
         let mut i = 0;
-        while let Some(entry) = iterator.next(&mut data_buffer).await.unwrap() {
+        while let Some(entry) = iterator.next(&mut data_buffer).unwrap() {
             assert_eq!(entry.into_buf(), gen_data(i));
             i += 2;
         }
@@ -1100,7 +1042,7 @@ mod tests {
 
     #[cfg(feature = "tombstone")]
     #[test]
-    async fn pop_with_once_only_flash() {
+    fn pop_with_once_only_flash() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::OnceOnly, None, true),
             const { QueueConfig::new(0x00..0x40, 7) },
@@ -1110,26 +1052,17 @@ mod tests {
         let first = AlignedBuf(*b"first");
         let second = AlignedBuf(*b"second");
 
-        storage.push(&first[..], false).await.unwrap();
-        storage.push(&second[..], false).await.unwrap();
+        storage.push(&first[..], false).unwrap();
+        storage.push(&second[..], false).unwrap();
 
-        assert_eq!(
-            storage.pop(&mut data_buffer).await.unwrap().unwrap(),
-            b"first"
-        );
-        assert_eq!(
-            storage.peek(&mut data_buffer).await.unwrap().unwrap(),
-            b"second"
-        );
-        assert_eq!(
-            storage.pop(&mut data_buffer).await.unwrap().unwrap(),
-            b"second"
-        );
-        assert_eq!(storage.pop(&mut data_buffer).await.unwrap(), None);
+        assert_eq!(storage.pop(&mut data_buffer).unwrap().unwrap(), b"first");
+        assert_eq!(storage.peek(&mut data_buffer).unwrap().unwrap(), b"second");
+        assert_eq!(storage.pop(&mut data_buffer).unwrap().unwrap(), b"second");
+        assert_eq!(storage.pop(&mut data_buffer).unwrap(), None);
     }
 
     #[test]
-    async fn push_pop_tiny() {
+    fn push_pop_tiny() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40, 7) },
@@ -1144,31 +1077,27 @@ mod tests {
             let data = vec![i as u8; i % max_len + 1];
 
             println!("PUSH");
-            storage.push(&data, true).await.unwrap();
+            storage.push(&data, true).unwrap();
             assert_eq!(
-                storage.peek(&mut data_buffer).await.unwrap().unwrap(),
+                storage.peek(&mut data_buffer).unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
             println!("POP");
             assert_eq!(
-                storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+                storage.pop(&mut data_buffer).unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
             println!("PEEK");
-            assert_eq!(
-                storage.peek(&mut data_buffer).await.unwrap(),
-                None,
-                "At {i}"
-            );
+            assert_eq!(storage.peek(&mut data_buffer).unwrap(), None, "At {i}");
             println!("DONE");
         }
     }
 
     #[test]
     /// Same as [push_lots_then_pop_lots], except with added peeking and using the iterator style
-    async fn push_peek_pop_many() {
+    fn push_peek_pop_many() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000, 7) },
@@ -1189,24 +1118,19 @@ mod tests {
             for i in 0..20 {
                 let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
-                storage.push(&data, false).await.unwrap();
+                storage.push(&data, false).unwrap();
                 pushes += 1;
                 push_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
 
             let start_snapshot = storage.flash().stats_snapshot();
-            let mut iterator = storage.iter().await.unwrap();
+            let mut iterator = storage.iter().unwrap();
             peek_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             for i in 0..5 {
                 let start_snapshot = iterator.storage.flash().stats_snapshot();
                 let data = [i as u8; 50];
                 assert_eq!(
-                    iterator
-                        .next(&mut data_buffer)
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .deref(),
+                    iterator.next(&mut data_buffer).unwrap().unwrap().deref(),
                     &data[..],
                     "At {i}"
                 );
@@ -1215,7 +1139,7 @@ mod tests {
             }
 
             let start_snapshot = storage.flash().stats_snapshot();
-            let mut iterator = storage.iter().await.unwrap();
+            let mut iterator = storage.iter().unwrap();
             pop_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             for i in 0..5 {
                 let start_snapshot = iterator.storage.flash().stats_snapshot();
@@ -1223,11 +1147,9 @@ mod tests {
                 assert_eq!(
                     iterator
                         .next(&mut data_buffer)
-                        .await
                         .unwrap()
                         .unwrap()
                         .pop()
-                        .await
                         .unwrap(),
                     &data,
                     "At {i}"
@@ -1239,24 +1161,19 @@ mod tests {
             for i in 20..25 {
                 let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
-                storage.push(&data, false).await.unwrap();
+                storage.push(&data, false).unwrap();
                 pushes += 1;
                 push_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
 
             let start_snapshot = storage.flash().stats_snapshot();
-            let mut iterator = storage.iter().await.unwrap();
+            let mut iterator = storage.iter().unwrap();
             peek_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             for i in 5..25 {
                 let start_snapshot = iterator.storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    iterator
-                        .next(&mut data_buffer)
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .deref(),
+                    iterator.next(&mut data_buffer).unwrap().unwrap().deref(),
                     &data,
                     "At {i}"
                 );
@@ -1265,7 +1182,7 @@ mod tests {
             }
 
             let start_snapshot = storage.flash().stats_snapshot();
-            let mut iterator = storage.iter().await.unwrap();
+            let mut iterator = storage.iter().unwrap();
             pop_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             for i in 5..25 {
                 let start_snapshot = iterator.storage.flash().stats_snapshot();
@@ -1273,11 +1190,9 @@ mod tests {
                 assert_eq!(
                     iterator
                         .next(&mut data_buffer)
-                        .await
                         .unwrap()
                         .unwrap()
                         .pop()
-                        .await
                         .unwrap(),
                     &data,
                     "At {i}"
@@ -1345,7 +1260,7 @@ mod tests {
     }
 
     #[test]
-    async fn push_lots_then_pop_lots() {
+    fn push_lots_then_pop_lots() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000, 7) },
@@ -1364,7 +1279,7 @@ mod tests {
             for i in 0..20 {
                 let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
-                storage.push(&data, false).await.unwrap();
+                storage.push(&data, false).unwrap();
                 pushes += 1;
                 push_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
@@ -1373,7 +1288,7 @@ mod tests {
                 let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+                    storage.pop(&mut data_buffer).unwrap().unwrap(),
                     &data,
                     "At {i}"
                 );
@@ -1384,7 +1299,7 @@ mod tests {
             for i in 20..25 {
                 let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
-                storage.push(&data, false).await.unwrap();
+                storage.push(&data, false).unwrap();
                 pushes += 1;
                 push_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
@@ -1393,7 +1308,7 @@ mod tests {
                 let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+                    storage.pop(&mut data_buffer).unwrap().unwrap(),
                     &data,
                     "At {i}"
                 );
@@ -1442,7 +1357,7 @@ mod tests {
     }
 
     #[test]
-    async fn pop_with_empty_section() {
+    fn pop_with_empty_section() {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40, 7) },
@@ -1453,41 +1368,41 @@ mod tests {
             - QueueStorage::<MockFlashTiny, NoCache>::item_overhead_size() as usize;
 
         data_buffer[..max_len].copy_from_slice(&vec![0xAA; max_len]);
-        storage.push(&data_buffer[0..max_len], false).await.unwrap();
+        storage.push(&data_buffer[0..max_len], false).unwrap();
         data_buffer[..max_len].copy_from_slice(&vec![0xBB; max_len]);
-        storage.push(&data_buffer[0..max_len], false).await.unwrap();
+        storage.push(&data_buffer[0..max_len], false).unwrap();
 
         // There's now an unused gap at the end of the first page
 
         assert_eq!(
-            storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+            storage.pop(&mut data_buffer).unwrap().unwrap(),
             &vec![0xAA; max_len]
         );
 
         assert_eq!(
-            storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+            storage.pop(&mut data_buffer).unwrap().unwrap(),
             &vec![0xBB; max_len]
         );
     }
 
     #[test]
-    async fn search_pages() {
+    fn search_pages() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000, 7) },
             NoCache::new(),
         );
 
-        storage.inner.close_page(0).await.unwrap();
-        storage.inner.close_page(1).await.unwrap();
-        storage.inner.partial_close_page(2).await.unwrap();
+        storage.inner.close_page(0).unwrap();
+        storage.inner.close_page(1).unwrap();
+        storage.inner.partial_close_page(2).unwrap();
 
-        assert_eq!(storage.find_youngest_page().await.unwrap(), 2);
-        assert_eq!(storage.find_oldest_page().await.unwrap(), 0);
+        assert_eq!(storage.find_youngest_page().unwrap(), 2);
+        assert_eq!(storage.find_oldest_page().unwrap(), 0);
     }
 
     #[test]
-    async fn store_too_big_item() {
+    fn store_too_big_item() {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000, 7) },
@@ -1500,19 +1415,16 @@ mod tests {
 
         storage
             .push(&AlignedBuf([0; MAX_ITEM_SIZE]), false)
-            .await
             .unwrap();
 
         assert_eq!(
-            storage
-                .push(&AlignedBuf([0; MAX_ITEM_SIZE + 1]), false,)
-                .await,
+            storage.push(&AlignedBuf([0; MAX_ITEM_SIZE + 1]), false,),
             Err(Error::ItemTooBig)
         );
     }
 
     #[test]
-    async fn push_on_single_page() {
+    fn push_on_single_page() {
         let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<1, 4, 256>::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x400, 7) },
@@ -1521,10 +1433,10 @@ mod tests {
         let data = AlignedBuf([0, 1, 2, 3, 4, 0, 0, 0]);
 
         for _ in 0..100 {
-            match storage.push(&data[..5], true).await {
+            match storage.push(&data[..5], true) {
                 Ok(_) => {}
                 Err(e) => {
-                    println!("{}", storage.print_items().await);
+                    println!("{}", storage.print_items());
                     panic!("{e}");
                 }
             }

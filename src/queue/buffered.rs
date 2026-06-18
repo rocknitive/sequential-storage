@@ -3,7 +3,7 @@
 //! NOR flash writes are slow and erases are very slow. If a producer emits data faster than the
 //! flash interface can commit it, [`BufferedQueue`] accepts items into a fixed-size RAM ring
 //! buffer via the synchronous [`enqueue`][BufferedQueue::enqueue] call (no flash I/O) and
-//! asynchronously drains them to flash via [`drain_one`][BufferedQueue::drain_one] or
+//! drains them to flash via [`drain_one`][BufferedQueue::drain_one] or
 //! [`drain_all`][BufferedQueue::drain_all].
 //!
 //! # Overflow policy
@@ -23,13 +23,7 @@
 //! power loss. Items that have been drained follow the power-fail safety guarantees of
 //! sequential-storage.
 //!
-//! # Embassy / ISR-safe use
-//!
-//! Enable the `shared-ram-ring` feature for [`SharedRamRing`], which wraps the ring in a
-//! critical-section mutex so it can be enqueued to from an interrupt handler, and signals
-//! a drain task the moment data arrives.
-
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage::nor_flash::NorFlash;
 
 use super::QueueStorage;
 use crate::{DeletableFlash, Error, cache::CacheImpl};
@@ -204,15 +198,14 @@ pub enum OverflowPolicy {
 /// queue.enqueue(&sample, OverflowPolicy::Err)?;
 ///
 /// // Slow path — called from a lower-priority task or on a timer:
-/// queue.drain_all(&mut scratch, false).await?;
+/// queue.drain_all(&mut scratch, false)?;
 ///
 /// // Read path — flash items are popped first, then RAM items:
-/// if let Some(data) = queue.pop(&mut buf).await? {
+/// if let Some(data) = queue.pop(&mut buf)? {
 ///     // process data
 /// }
 /// ```
 ///
-/// For ISR-safe use, enable the `shared-ram-ring` feature and use [`SharedRamRing`] instead.
 pub struct BufferedQueue<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> {
     storage: QueueStorage<S, C>,
     ram: RamRing<RAM_BYTES>,
@@ -245,7 +238,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     /// oldest pending item.
     ///
     /// Returns `Ok(true)` if an item was committed to flash, `Ok(false)` if the ring was empty.
-    pub async fn drain_one(
+    pub fn drain_one(
         &mut self,
         scratch: &mut [u8],
         allow_overwrite: bool,
@@ -254,7 +247,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
             return Ok(false);
         };
         let len = data.len();
-        self.storage.push(&scratch[..len], allow_overwrite).await?;
+        self.storage.push(&scratch[..len], allow_overwrite)?;
         self.ram.discard_oldest();
         Ok(true)
     }
@@ -262,12 +255,12 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     /// Drain all RAM-buffered items to flash.
     ///
     /// `scratch` must be large enough for the largest pending item.
-    pub async fn drain_all(
+    pub fn drain_all(
         &mut self,
         scratch: &mut [u8],
         allow_overwrite: bool,
     ) -> Result<(), Error<S::Error>> {
-        while self.drain_one(scratch, allow_overwrite).await? {}
+        while self.drain_one(scratch, allow_overwrite)? {}
         Ok(())
     }
 
@@ -275,7 +268,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     ///
     /// Flash items are always older than RAM items, so flash is read first. If flash is
     /// empty the oldest item is taken directly from the RAM ring without writing to flash.
-    pub async fn pop<'d>(
+    pub fn pop<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
@@ -283,7 +276,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
         S: DeletableFlash,
     {
         // Reborrow so we can reuse data_buffer if flash returns None.
-        let flash_len = self.storage.pop(&mut *data_buffer).await?.map(|s| s.len());
+        let flash_len = self.storage.pop(&mut *data_buffer)?.map(|s| s.len());
         if let Some(len) = flash_len {
             return Ok(Some(&mut data_buffer[..len]));
         }
@@ -299,12 +292,12 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     ///
     /// Flash items are always older than RAM items, so flash is read first. If flash is
     /// empty the oldest item is read directly from the RAM ring without writing to flash.
-    pub async fn peek<'d>(
+    pub fn peek<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
         // Reborrow so we can reuse data_buffer if flash returns None.
-        let flash_len = self.storage.peek(&mut *data_buffer).await?.map(|s| s.len());
+        let flash_len = self.storage.peek(&mut *data_buffer)?.map(|s| s.len());
         if let Some(len) = flash_len {
             return Ok(Some(&mut data_buffer[..len]));
         }
@@ -340,200 +333,6 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     /// **Any items still in the RAM ring are discarded.**
     pub fn into_storage(self) -> QueueStorage<S, C> {
         self.storage
-    }
-}
-
-// ── SharedRamRing ─────────────────────────────────────────────────────────────
-
-/// An ISR-safe RAM ring buffer with an Embassy [`Signal`][embassy_sync::signal::Signal] that
-/// wakes a drain task on enqueue.
-///
-/// Designed to be placed in a `static`:
-/// ```ignore
-/// static RING: SharedRamRing<256> = SharedRamRing::new();
-/// ```
-///
-/// The [`enqueue`][SharedRamRing::enqueue] method is synchronous and interrupt-safe.
-/// Drain and read methods (`drain_one`, `drain_all`, `pop`, `peek`) are `async` and intended
-/// for task context; they take a `&mut QueueStorage` so flash access remains exclusive to
-/// one task.
-///
-/// ## Typical wiring
-///
-/// ```ignore
-/// static RING: SharedRamRing<256> = SharedRamRing::new();
-///
-/// // In an interrupt handler (or anywhere, no async needed):
-/// RING.enqueue(&sensor_sample, OverflowPolicy::DiscardOldest);
-///
-/// // In the drain task:
-/// #[embassy_executor::task]
-/// async fn drain(mut storage: QueueStorage<Flash, NoCache>) {
-///     let mut scratch = [0u8; 64];
-///     loop {
-///         RING.wait_and_drain_all(&mut storage, &mut scratch, false).await.unwrap();
-///     }
-/// }
-/// ```
-#[cfg(feature = "shared-ram-ring")]
-pub struct SharedRamRing<const N: usize> {
-    ring: embassy_sync::blocking_mutex::Mutex<
-        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
-        core::cell::RefCell<RamRing<N>>,
-    >,
-    signal: embassy_sync::signal::Signal<
-        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
-        (),
-    >,
-}
-
-#[cfg(feature = "shared-ram-ring")]
-impl<const N: usize> SharedRamRing<N> {
-    /// Create a new `SharedRamRing`. Suitable for `static` initialisation.
-    pub const fn new() -> Self {
-        Self {
-            ring: embassy_sync::blocking_mutex::Mutex::new(
-                core::cell::RefCell::new(RamRing::new()),
-            ),
-            signal: embassy_sync::signal::Signal::new(),
-        }
-    }
-
-    // ── Producer API (sync, ISR-safe) ─────────────────────────────────────────
-
-    /// Enqueue an item. Safe to call from any context, including interrupt handlers.
-    ///
-    /// Signals the drain task after a successful enqueue so it wakes without polling.
-    /// Returns `Err(())` if the ring is full and `policy` is [`OverflowPolicy::Err`].
-    #[allow(clippy::result_unit_err)]
-    pub fn enqueue(&self, data: &[u8], policy: OverflowPolicy) -> Result<(), ()> {
-        let result = self.ring.lock(|r| match policy {
-            OverflowPolicy::Err => r.borrow_mut().push(data),
-            OverflowPolicy::DiscardOldest => r.borrow_mut().push_overwriting(data),
-        });
-        if result.is_ok() {
-            self.signal.signal(());
-        }
-        result
-    }
-
-    // ── Task-context API (async) ──────────────────────────────────────────────
-
-    /// Wait until at least one item has been enqueued since the last `wait`.
-    pub async fn wait(&self) {
-        self.signal.wait().await;
-    }
-
-    /// Drain one item from the ring to flash.
-    ///
-    /// `scratch` must be at least [`oldest_ram_item_len`][Self::oldest_ram_item_len] bytes.
-    /// Returns `Ok(true)` if an item was written, `Ok(false)` if the ring was empty.
-    ///
-    /// The critical section is held only for the brief ring peek/discard; the slow flash
-    /// write runs outside it.
-    pub async fn drain_one<S: NorFlash, C: CacheImpl>(
-        &self,
-        storage: &mut QueueStorage<S, C>,
-        scratch: &mut [u8],
-        allow_overwrite: bool,
-    ) -> Result<bool, Error<S::Error>> {
-        let len = self
-            .ring
-            .lock(|r| r.borrow().peek_into(scratch).map(|s| s.len()));
-        let Some(len) = len else {
-            return Ok(false);
-        };
-        storage.push(&scratch[..len], allow_overwrite).await?;
-        self.ring.lock(|r| r.borrow_mut().discard_oldest());
-        Ok(true)
-    }
-
-    /// Drain all ring items to flash.
-    ///
-    /// `scratch` must be large enough for the largest pending item.
-    pub async fn drain_all<S: NorFlash, C: CacheImpl>(
-        &self,
-        storage: &mut QueueStorage<S, C>,
-        scratch: &mut [u8],
-        allow_overwrite: bool,
-    ) -> Result<(), Error<S::Error>> {
-        while self.drain_one(storage, scratch, allow_overwrite).await? {}
-        Ok(())
-    }
-
-    /// Wait for the signal, then drain all ring items to flash.
-    ///
-    /// This is the recommended drain-task body:
-    /// ```ignore
-    /// loop {
-    ///     ring.wait_and_drain_all(&mut storage, &mut scratch, false).await.unwrap();
-    /// }
-    /// ```
-    pub async fn wait_and_drain_all<S: NorFlash, C: CacheImpl>(
-        &self,
-        storage: &mut QueueStorage<S, C>,
-        scratch: &mut [u8],
-        allow_overwrite: bool,
-    ) -> Result<(), Error<S::Error>> {
-        self.wait().await;
-        self.drain_all(storage, scratch, allow_overwrite).await
-    }
-
-    /// Pop the oldest item (drains ring to flash first to preserve ordering).
-    pub async fn pop<'d, S: DeletableFlash, C: CacheImpl>(
-        &self,
-        storage: &mut QueueStorage<S, C>,
-        data_buffer: &'d mut [u8],
-        allow_overwrite: bool,
-    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
-        if self.ram_pending_count() > 0 {
-            self.drain_all(storage, data_buffer, allow_overwrite)
-                .await?;
-        }
-        storage.pop(data_buffer).await
-    }
-
-    /// Peek at the oldest item without removing it (drains ring to flash first).
-    pub async fn peek<'d, S: NorFlash, C: CacheImpl>(
-        &self,
-        storage: &mut QueueStorage<S, C>,
-        data_buffer: &'d mut [u8],
-        allow_overwrite: bool,
-    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
-        if self.ram_pending_count() > 0 {
-            self.drain_all(storage, data_buffer, allow_overwrite)
-                .await?;
-        }
-        storage.peek(data_buffer).await
-    }
-
-    // ── Introspection ─────────────────────────────────────────────────────────
-
-    /// Total capacity of the ring in bytes (including 2-byte per-item length prefixes).
-    pub const fn ram_capacity_bytes() -> usize {
-        N
-    }
-
-    /// Free bytes remaining in the ring.
-    pub fn ram_free_bytes(&self) -> usize {
-        self.ring.lock(|r| N - r.borrow().bytes_used())
-    }
-
-    /// Number of items currently buffered in the ring.
-    pub fn ram_pending_count(&self) -> usize {
-        self.ring.lock(|r| r.borrow().len())
-    }
-
-    /// Byte length of the oldest item in the ring, or `None` if the ring is empty.
-    pub fn oldest_ram_item_len(&self) -> Option<usize> {
-        self.ring.lock(|r| r.borrow().oldest_len())
-    }
-}
-
-#[cfg(feature = "shared-ram-ring")]
-impl<const N: usize> Default for SharedRamRing<N> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -608,8 +407,6 @@ mod tests {
         use crate::cache::NoCache;
         use crate::mock_flash::MockFlashBase;
         use crate::queue::{QueueConfig, QueueStorage};
-        use futures::executor::block_on;
-
         // 4 pages × 64 words × 4 bytes/word = 1 KiB flash
         type MockFlash = MockFlashBase<4, 4, 64>;
 
@@ -625,56 +422,45 @@ mod tests {
 
         #[test]
         fn enqueue_drain_pop() {
-            block_on(async {
-                let mut queue = make_queue();
-                let mut scratch = [0u8; 64];
-                let mut out = [0u8; 64];
+            let mut queue = make_queue();
+            let mut scratch = [0u8; 64];
+            let mut out = [0u8; 64];
 
-                // Enqueue two items into RAM — no flash I/O yet.
-                queue.enqueue(b"hello", OverflowPolicy::Err).unwrap();
-                queue.enqueue(b"world", OverflowPolicy::Err).unwrap();
-                assert_eq!(queue.ram_pending_count(), 2);
+            queue.enqueue(b"hello", OverflowPolicy::Err).unwrap();
+            queue.enqueue(b"world", OverflowPolicy::Err).unwrap();
+            assert_eq!(queue.ram_pending_count(), 2);
 
-                // Drain RAM → flash.
-                queue.drain_all(&mut scratch, false).await.unwrap();
-                assert_eq!(queue.ram_pending_count(), 0);
+            queue.drain_all(&mut scratch, false).unwrap();
+            assert_eq!(queue.ram_pending_count(), 0);
 
-                // Pop from flash in FIFO order.
-                let data = queue.pop(&mut out).await.unwrap().unwrap();
-                assert_eq!(data, b"hello");
+            let data = queue.pop(&mut out).unwrap().unwrap();
+            assert_eq!(data, b"hello");
 
-                let data = queue.pop(&mut out).await.unwrap().unwrap();
-                assert_eq!(data, b"world");
+            let data = queue.pop(&mut out).unwrap().unwrap();
+            assert_eq!(data, b"world");
 
-                assert!(queue.pop(&mut out).await.unwrap().is_none());
-            });
+            assert!(queue.pop(&mut out).unwrap().is_none());
         }
 
         #[test]
         fn pop_reads_flash_before_ram() {
-            block_on(async {
-                // Push "first" directly to flash, then wrap in a BufferedQueue with "second" in RAM.
-                // The mock flash requires write buffers aligned to BYTES_PER_WORD = 4 bytes.
-                let mut storage = make_storage();
-                let mut aligned = [0u8; 8];
-                aligned[..5].copy_from_slice(b"first");
-                storage.push(&aligned[..5], false).await.unwrap();
+            let mut storage = make_storage();
+            let mut aligned = [0u8; 8];
+            aligned[..5].copy_from_slice(b"first");
+            storage.push(&aligned[..5], false).unwrap();
 
-                let mut queue: BufferedQueue<MockFlash, NoCache, 256> = BufferedQueue::new(storage);
-                let mut out = [0u8; 64];
+            let mut queue: BufferedQueue<MockFlash, NoCache, 256> = BufferedQueue::new(storage);
+            let mut out = [0u8; 64];
 
-                // Buffer "second" in RAM only.
-                queue.enqueue(b"second", OverflowPolicy::Err).unwrap();
+            queue.enqueue(b"second", OverflowPolicy::Err).unwrap();
 
-                // pop returns flash items (older) before RAM items.
-                let data = queue.pop(&mut out).await.unwrap().unwrap();
-                assert_eq!(data, b"first");
+            let data = queue.pop(&mut out).unwrap().unwrap();
+            assert_eq!(data, b"first");
 
-                let data = queue.pop(&mut out).await.unwrap().unwrap();
-                assert_eq!(data, b"second");
+            let data = queue.pop(&mut out).unwrap().unwrap();
+            assert_eq!(data, b"second");
 
-                assert!(queue.pop(&mut out).await.unwrap().is_none());
-            });
+            assert!(queue.pop(&mut out).unwrap().is_none());
         }
 
         #[test]
@@ -707,14 +493,11 @@ mod tests {
 
             assert_eq!(queue.ram_pending_count(), 2);
 
-            // Drain to flash and pop to verify FIFO order with "aaaa" evicted.
-            block_on(async {
-                let mut out = [0u8; 64];
-                let data = queue.pop(&mut out).await.unwrap().unwrap();
-                assert_eq!(data, b"bbbb");
-                let data = queue.pop(&mut out).await.unwrap().unwrap();
-                assert_eq!(data, b"cccc");
-            });
+            let mut out = [0u8; 64];
+            let data = queue.pop(&mut out).unwrap().unwrap();
+            assert_eq!(data, b"bbbb");
+            let data = queue.pop(&mut out).unwrap().unwrap();
+            assert_eq!(data, b"cccc");
         }
 
         #[test]

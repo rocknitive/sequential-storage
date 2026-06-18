@@ -1,6 +1,6 @@
 use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage::nor_flash::NorFlash;
 
 use crate::flash_layout::FlashLayout;
 use crate::{PageState, item::ItemHeader};

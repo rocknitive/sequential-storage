@@ -2,7 +2,7 @@
 
 use core::{fmt::Debug, ops::Range};
 
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage::nor_flash::NorFlash;
 
 use crate::{PageState, item::ItemHeader, map::Key};
 

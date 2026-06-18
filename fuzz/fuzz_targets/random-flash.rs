@@ -2,7 +2,6 @@
 
 extern crate libfuzzer_sys;
 
-use futures::executor::block_on;
 use libfuzzer_sys::fuzz_target;
 use sequential_storage::{
     cache::NoCache,
@@ -28,5 +27,5 @@ fn fuzz(random_data: &[u8]) {
         const { QueueConfig::new(0..(PAGES * WORD_SIZE * WORDS_PER_PAGE) as u32, 1) },
         NoCache::new(),
     );
-    block_on(storage.print_items());
+    storage.print_items();
 }

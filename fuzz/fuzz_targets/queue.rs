@@ -1,6 +1,5 @@
 #![no_main]
 
-use futures::executor::block_on;
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::{Rng, SeedableRng};
@@ -79,7 +78,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
 
     for mut op in ops.ops.into_iter() {
         #[cfg(fuzzing_repro)]
-        eprintln!("{}", block_on(flash.print_items()));
+        eprintln!("{}", storage.print_items());
         #[cfg(fuzzing_repro)]
         eprintln!("{:?}", cache);
         #[cfg(fuzzing_repro)]
@@ -91,7 +90,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                     .map(|_| rng.random())
                     .collect();
 
-                let max_fit = match block_on(storage.find_max_fit()) {
+                let max_fit = match storage.find_max_fit() {
                     Ok(val) => val,
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
@@ -104,7 +103,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                 };
 
                 buf.0[..val.len()].copy_from_slice(&val);
-                match block_on(storage.push(&buf.0[..val.len()], false)) {
+                match storage.push(&buf.0[..val.len()], false) {
                     Ok(_) => {
                         if let Some(max_fit) = max_fit {
                             if val.len() > max_fit as usize {
@@ -128,7 +127,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                         backtrace: _backtrace,
                     }) => {
                         // We need to check if it managed to write
-                        if let Some(true) = block_on(storage.flash().get_item_presence(address)) {
+                        if let Some(true) = storage.flash().get_item_presence(address) {
                             #[cfg(fuzzing_repro)]
                             eprintln!("Early shutoff when pushing {val:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
                             order.push_back(val);
@@ -148,7 +147,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                 }
             }
             Op::Pop => {
-                match block_on(storage.pop(&mut buf.0)) {
+                match storage.pop(&mut buf.0) {
                     Ok(value) => {
                         assert_eq!(value, order.pop_front().as_deref_mut());
                     }
@@ -163,7 +162,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
 
                         if operation != Operation::Erase
                             && !matches!(
-                                block_on(storage.flash().get_item_presence(address)),
+                                storage.flash().get_item_presence(address),
                                 Some(true)
                             )
                         {
@@ -183,7 +182,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                     Err(e) => panic!("Error popping (single) from queue: {e:?}"),
                 }
             }
-            Op::Peek => match block_on(storage.peek(&mut buf.0)) {
+            Op::Peek => match storage.peek(&mut buf.0) {
                 Ok(value) => {
                     assert_eq!(
                         value.map(|b| &b[..]),
@@ -211,7 +210,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                 Err(e) => panic!("Error popping (single) from queue: {e:?}"),
             },
             Op::Iterate(pop_sequence) => {
-                let mut iterator = match block_on(storage.iter()) {
+                let mut iterator = match storage.iter() {
                     Ok(val) => val,
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
@@ -227,7 +226,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
 
                 let mut popped_items = 0;
                 for (i, do_pop) in pop_sequence.iter().enumerate() {
-                    match block_on(iterator.next(&mut buf.0)) {
+                    match iterator.next(&mut buf.0) {
                         Ok(Some(value)) => {
                             assert_eq!(&*value, order.get(i - popped_items).unwrap().as_slice());
 
@@ -235,7 +234,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                                 #[cfg(fuzzing_repro)]
                                 eprintln!("Popping item at address: {}", value.address());
 
-                                let popped = block_on(value.pop());
+                                let popped = value.pop();
 
                                 match popped {
                                     Ok(value) => {
@@ -267,9 +266,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
 
                                         if operation != Operation::Erase
                                             && !matches!(
-                                                block_on(
-                                                    storage.flash().get_item_presence(address)
-                                                ),
+                                                storage.flash().get_item_presence(address),
                                                 Some(true)
                                             )
                                         {
@@ -297,7 +294,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
 
                             if operation != Operation::Erase
                                 && !matches!(
-                                    block_on(storage.flash().get_item_presence(address)),
+                                    storage.flash().get_item_presence(address),
                                     Some(true)
                                 )
                             {

@@ -1,6 +1,6 @@
 use core::fmt::{Display, Formatter};
 use core::{marker::PhantomData, num::NonZeroUsize, ops::Range};
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage::nor_flash::NorFlash;
 
 use crate::{AlignedBuf, Error, MARKER, MAX_WORD_SIZE, NorFlashExt, marker_is_set};
 
@@ -134,22 +134,22 @@ impl<S: NorFlash> FlashPage<S> {
         self.end_address() - Self::end_marker_size() as u32
     }
 
-    pub(crate) async fn start_is_marked(&self, flash: &mut S) -> Result<bool, Error<S::Error>> {
-        match self.get_page_start_status(flash).await? {
+    pub(crate) fn start_is_marked(&self, flash: &mut S) -> Result<bool, Error<S::Error>> {
+        match self.get_page_start_status(flash)? {
             None => Ok(false),
             Some(_) => Ok(true),
         }
     }
 
-    pub(crate) async fn end_is_marked(&self, flash: &mut S) -> Result<bool, Error<S::Error>> {
-        marker_is_set(flash, self.end_marker_address()).await
+    pub(crate) fn end_is_marked(&self, flash: &mut S) -> Result<bool, Error<S::Error>> {
+        marker_is_set(flash, self.end_marker_address())
     }
 
     /// Parses version information from the page start marker.
     ///
     /// Returns `Ok(None)` if the marker is still fully erased, `Ok(StorageVersion)` if parsed
     /// successfully, otherwise `Err(S::Error)`.
-    pub(crate) async fn get_page_start_status(
+    pub(crate) fn get_page_start_status(
         &self,
         flash: &mut S,
     ) -> Result<Option<StorageVersion>, Error<S::Error>> {
@@ -159,7 +159,6 @@ impl<S: NorFlash> FlashPage<S> {
                 self.start_marker_address(),
                 &mut buffer[..FlashPage::<S>::start_marker_size()],
             )
-            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]

@@ -7,15 +7,13 @@ mod queue_tests {
         queue::{QueueConfig, QueueStorage},
     };
 
-    use futures_test::test;
-
     const NUM_PAGES: usize = 4;
     const LOOP_COUNT: usize = 2000;
 
     #[test]
-    async fn no_cache() {
+    fn no_cache() {
         assert_eq!(
-            run_test(NoCache::new()).await,
+            run_test(NoCache::new()),
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 162,
@@ -37,9 +35,9 @@ mod queue_tests {
     }
 
     #[test]
-    async fn page_state_cache() {
+    fn page_state_cache() {
         assert_eq!(
-            run_test(PageStateCache::<NUM_PAGES>::new()).await,
+            run_test(PageStateCache::<NUM_PAGES>::new()),
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 162,
@@ -61,9 +59,9 @@ mod queue_tests {
     }
 
     #[test]
-    async fn page_pointer_cache() {
+    fn page_pointer_cache() {
         assert_eq!(
-            run_test(PagePointerCache::<NUM_PAGES>::new()).await,
+            run_test(PagePointerCache::<NUM_PAGES>::new()),
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 162,
@@ -84,7 +82,7 @@ mod queue_tests {
         );
     }
 
-    async fn run_test(cache: impl CacheImpl) -> FlashStatsResult {
+    fn run_test(cache: impl CacheImpl) -> FlashStatsResult {
         let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x400, 7) },
@@ -99,24 +97,20 @@ mod queue_tests {
             let data = vec![i as u8; i % 20 + 1];
 
             println!("PUSH");
-            storage.push(&data, true).await.unwrap();
+            storage.push(&data, true).unwrap();
             assert_eq!(
-                storage.peek(&mut data_buffer).await.unwrap().unwrap(),
+                storage.peek(&mut data_buffer).unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
             println!("POP");
             assert_eq!(
-                storage.pop(&mut data_buffer).await.unwrap().unwrap(),
+                storage.pop(&mut data_buffer).unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
             println!("PEEK");
-            assert_eq!(
-                storage.peek(&mut data_buffer).await.unwrap(),
-                None,
-                "At {i}"
-            );
+            assert_eq!(storage.peek(&mut data_buffer).unwrap(), None, "At {i}");
             println!("DONE");
         }
 
@@ -133,14 +127,12 @@ mod map_tests {
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
     };
 
-    use futures_test::test;
-
     const NUM_PAGES: usize = 4;
 
     #[test]
-    async fn no_cache() {
+    fn no_cache() {
         assert_eq!(
-            run_test(NoCache::new()).await,
+            run_test(NoCache::new()),
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 459,
@@ -162,9 +154,9 @@ mod map_tests {
     }
 
     #[test]
-    async fn page_state_cache() {
+    fn page_state_cache() {
         assert_eq!(
-            run_test(PageStateCache::<NUM_PAGES>::new()).await,
+            run_test(PageStateCache::<NUM_PAGES>::new()),
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 459,
@@ -186,9 +178,9 @@ mod map_tests {
     }
 
     #[test]
-    async fn page_pointer_cache() {
+    fn page_pointer_cache() {
         assert_eq!(
-            run_test(PagePointerCache::<NUM_PAGES>::new()).await,
+            run_test(PagePointerCache::<NUM_PAGES>::new()),
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 459,
@@ -210,9 +202,9 @@ mod map_tests {
     }
 
     #[test]
-    async fn key_pointer_cache_half() {
+    fn key_pointer_cache_half() {
         assert_eq!(
-            run_test(KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await,
+            run_test(KeyPointerCache::<NUM_PAGES, u16, 12>::new()),
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 459,
@@ -234,9 +226,9 @@ mod map_tests {
     }
 
     #[test]
-    async fn key_pointer_cache_full() {
+    fn key_pointer_cache_full() {
         assert_eq!(
-            run_test(KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await,
+            run_test(KeyPointerCache::<NUM_PAGES, u16, 24>::new()),
             if cfg!(feature = "tombstone") {
                 FlashStatsResult {
                     erases: 459,
@@ -257,7 +249,7 @@ mod map_tests {
         );
     }
 
-    async fn run_test(cache: impl KeyCacheImpl<u16>) -> FlashStatsResult {
+    fn run_test(cache: impl KeyCacheImpl<u16>) -> FlashStatsResult {
         let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
             const { MapConfig::new(0x00..0x400, 7) },
@@ -284,7 +276,6 @@ mod map_tests {
                         &(i as u16),
                         &vec![i as u8; LENGHT_PER_KEY[i]].as_slice(),
                     )
-                    .await
                     .unwrap();
             }
 
@@ -296,7 +287,6 @@ mod map_tests {
             for i in READ_ORDER {
                 let item = storage
                     .fetch_item::<&[u8]>(&mut data_buffer, &(i as u16))
-                    .await
                     .unwrap()
                     .unwrap();
 

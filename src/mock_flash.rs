@@ -2,7 +2,7 @@ use core::{
     fmt::Display,
     ops::{Add, AddAssign, Range},
 };
-use embedded_storage_async::nor_flash::{
+use embedded_storage::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
 };
 
@@ -122,7 +122,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     /// - If some, the item is there.
     /// - If true, the item is present and fine.
     /// - If false, the item is corrupt or erased.
-    pub async fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
+    pub fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
         if !Self::FULL_FLASH_RANGE.contains(&target_item_address) {
             return None;
         }
@@ -137,13 +137,12 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
         let mut found_item = None;
         let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
-        while let (Some(header), item_address) = it.traverse(self, |_, _| false).await.unwrap() {
+        while let (Some(header), item_address) = it.traverse(self, |_, _| false).unwrap() {
             let next_item_address = header.next_item_address::<Self>(item_address);
 
             if (item_address..next_item_address).contains(&target_item_address) {
                 let maybe_item = header
                     .read_item(self, &mut buf, item_address, page_data_end)
-                    .await
                     .unwrap();
 
                 match maybe_item {
@@ -175,7 +174,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> R
 {
     const READ_SIZE: usize = BYTES_PER_WORD;
 
-    async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         self.current_stats.reads += 1;
         self.current_stats.bytes_read += bytes.len() as u64;
 
@@ -207,7 +206,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
 
     const ERASE_SIZE: usize = Self::PAGE_BYTES;
 
-    async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+    fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
         self.current_stats.erases += 1;
 
         let from = from as usize;
@@ -235,7 +234,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
         Ok(())
     }
 
-    async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         self.current_stats.writes += 1;
 
         let range = Self::validate_operation(offset, bytes.len())?;

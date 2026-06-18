@@ -1,6 +1,5 @@
 #![no_main]
 
-use futures::executor::block_on;
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
@@ -103,7 +102,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
 
     for op in ops.ops.into_iter() {
         #[cfg(fuzzing_repro)]
-        eprintln!("{}", block_on(flash.print_items()));
+        eprintln!("{}", storage.print_items());
         #[cfg(fuzzing_repro)]
         eprintln!("{:?}", cache);
         #[cfg(fuzzing_repro)]
@@ -112,7 +111,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
         match op.clone() {
             Op::Store(op) => {
                 let (key, value) = op.into_test_item(&mut rng);
-                match block_on(storage.store_item(&mut buf.0, &key, &value.as_slice())) {
+                match storage.store_item(&mut buf.0, &key, &value.as_slice()) {
                     Ok(_) => {
                         map.insert(key, value);
                     }
@@ -121,7 +120,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                         value: MockFlashError::EarlyShutoff(_, _),
                         backtrace: _backtrace,
                     }) => {
-                        match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
+                        match storage.fetch_item::<&[u8]>(&mut buf.0, &key) {
                             Ok(Some(check_item)) if check_item == value => {
                                 #[cfg(fuzzing_repro)]
                                 eprintln!("Early shutoff when storing key: {key}, value: {value:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
@@ -145,7 +144,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     Err(e) => panic!("{e:?}"),
                 }
             }
-            Op::Fetch(key) => match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
+            Op::Fetch(key) => match storage.fetch_item::<&[u8]>(&mut buf.0, &key) {
                 Ok(Some(fetch_result)) => {
                     let map_value = map
                         .get(&key)
@@ -172,7 +171,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                 Err(e) => panic!("{e:#?}"),
             },
             Op::Remove(key) => {
-                match block_on(storage.remove_item(&mut buf.0, &key)) {
+                match storage.remove_item(&mut buf.0, &key) {
                     Ok(()) => {
                         map.remove(&key);
                     }
@@ -181,7 +180,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                         backtrace: _backtrace,
                     }) => {
                         // Check if the item is still there. It might or it might not and either is fine
-                        match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
+                        match storage.fetch_item::<&[u8]>(&mut buf.0, &key) {
                             Ok(Some(_)) => {
                                 #[cfg(fuzzing_repro)]
                                 eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
@@ -206,7 +205,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                 }
             }
             Op::RemoveAll => {
-                match block_on(storage.remove_all_items(&mut buf.0)) {
+                match storage.remove_all_items(&mut buf.0) {
                     Ok(()) => {
                         map.clear();
                     }
@@ -216,7 +215,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     }) => {
                         for key in map.keys().copied().collect::<Vec<_>>() {
                             // Check if the item is still there. It might or it might not and either is fine
-                            match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
+                            match storage.fetch_item::<&[u8]>(&mut buf.0, &key) {
                                 Ok(Some(_)) => {
                                     #[cfg(fuzzing_repro)]
                                     eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
@@ -242,12 +241,12 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                 }
             }
             Op::Iter => {
-                let mut iter = block_on(storage.fetch_all_items(&mut buf.0)).unwrap();
+                let mut iter = storage.fetch_all_items(&mut buf.0).unwrap();
 
                 let mut seen_items = HashMap::new();
 
                 loop {
-                    match block_on(iter.next::<&[u8]>(&mut buf.0)) {
+                    match iter.next::<&[u8]>(&mut buf.0) {
                         Ok(None) => break,
                         Ok(Some((key, val))) => {
                             seen_items.insert(key, val.to_vec());

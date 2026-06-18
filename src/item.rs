@@ -29,7 +29,7 @@
 use core::num::{NonZero, NonZeroU32};
 use core::ops::Range;
 
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage::nor_flash::NorFlash;
 
 use crate::{
     AlignedBuf, DeletableFlash, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
@@ -80,7 +80,7 @@ impl ItemHeader {
     /// Read the header from the flash at the given address.
     ///
     /// If the item doesn't exist or doesn't fit between the address and the end address, none is returned.
-    pub async fn read_new<S: NorFlash>(
+    pub fn read_new<S: NorFlash>(
         flash: &mut S,
         address: u32,
         end_address: u32,
@@ -96,7 +96,6 @@ impl ItemHeader {
         loop {
             flash
                 .read(address, &mut buffer[..header_slice_len])
-                .await
                 .map_err(|e| Error::Storage {
                     value: e,
                     #[cfg(feature = "_test")]
@@ -137,7 +136,7 @@ impl ItemHeader {
             #[cfg(not(feature = "tombstone"))]
             erased: crc.is_none(),
             #[cfg(feature = "tombstone")]
-            erased: crate::marker_is_set(flash, Self::tombstone_address::<S>(address)).await?,
+            erased: crate::marker_is_set(flash, Self::tombstone_address::<S>(address))?,
         };
 
         if header.next_item_address::<S>(address) > end_address {
@@ -153,7 +152,7 @@ impl ItemHeader {
         Ok(Some(header))
     }
 
-    pub async fn read_item<'d, S: NorFlash>(
+    pub fn read_item<'d, S: NorFlash>(
         self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
@@ -180,7 +179,6 @@ impl ItemHeader {
                     if read_len != 0 {
                         flash
                             .read(data_address, &mut data_buffer[..read_len])
-                            .await
                             .map_err(|e| Error::Storage {
                                 value: e,
                                 #[cfg(feature = "_test")]
@@ -208,7 +206,7 @@ impl ItemHeader {
         }
     }
 
-    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
+    fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
@@ -219,7 +217,6 @@ impl ItemHeader {
 
         flash
             .write(address, &buffer[..Self::base_header_len::<S>()])
-            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
@@ -229,7 +226,7 @@ impl ItemHeader {
 
     /// Erase this item by setting the crc to none and overwriting the header with it.
     /// If the tombstone feature is enabled, this will write the reserved tombstone word instead.
-    pub async fn erase_data<S: DeletableFlash>(
+    pub fn erase_data<S: DeletableFlash>(
         mut self,
         flash: &mut S,
         flash_range: Range<u32>,
@@ -243,7 +240,7 @@ impl ItemHeader {
         }
         cache.notice_item_erased::<S>(flash_range.clone(), address, &self);
         #[cfg(not(feature = "tombstone"))]
-        self.write(flash, address).await?;
+        self.write(flash, address)?;
         #[cfg(feature = "tombstone")]
         {
             let buffer = AlignedBuf([crate::MARKER; MAX_WORD_SIZE]);
@@ -252,7 +249,6 @@ impl ItemHeader {
                     Self::tombstone_address::<S>(address),
                     &buffer[..S::WORD_SIZE],
                 )
-                .await
                 .map_err(|e| Error::Storage {
                     value: e,
                     #[cfg(feature = "_test")]
@@ -307,7 +303,7 @@ impl<'d> Item<'d> {
         (self.header, self.item_data_buffer)
     }
 
-    pub async fn write_new<S: NorFlash>(
+    pub fn write_new<S: NorFlash>(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
@@ -320,12 +316,12 @@ impl<'d> Item<'d> {
             erased: false,
         };
 
-        Self::write_raw(flash, flash_range, cache, &header, data, address).await?;
+        Self::write_raw(flash, flash_range, cache, &header, data, address)?;
 
         Ok(header)
     }
 
-    async fn write_raw<S: NorFlash>(
+    fn write_raw<S: NorFlash>(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
@@ -334,7 +330,7 @@ impl<'d> Item<'d> {
         address: u32,
     ) -> Result<(), Error<S::Error>> {
         cache.notice_item_written::<S>(flash_range, address, header);
-        header.write(flash, address).await?;
+        header.write(flash, address)?;
 
         let Some((data_block, data_left)) =
             data.split_at_checked(round_down_to_alignment_usize::<S>(data.len()))
@@ -350,7 +346,6 @@ impl<'d> Item<'d> {
         if !data_block.is_empty() {
             flash
                 .write(data_address, data_block)
-                .await
                 .map_err(|e| Error::Storage {
                     value: e,
                     #[cfg(feature = "_test")]
@@ -377,7 +372,6 @@ impl<'d> Item<'d> {
                     data_address + data_block.len() as u32,
                     &buffer[..extend_len],
                 )
-                .await
                 .map_err(|e| Error::Storage {
                     value: e,
                     #[cfg(feature = "_test")]
@@ -388,7 +382,7 @@ impl<'d> Item<'d> {
         Ok(())
     }
 
-    pub async fn write<S: NorFlash>(
+    pub fn write<S: NorFlash>(
         &self,
         flash: &mut S,
         flash_range: Range<u32>,
@@ -403,7 +397,6 @@ impl<'d> Item<'d> {
             self.data(),
             address,
         )
-        .await
     }
 
     pub fn unborrow(self) -> ItemUnborrowed {
@@ -535,7 +528,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     /// Scans through the items to find the first spot that is free to store a new item.
     ///
     /// - `end_address` is exclusive.
-    pub(crate) async fn find_next_free_item_spot(
+    pub(crate) fn find_next_free_item_spot(
         &mut self,
         start_address: u32,
         end_address: u32,
@@ -553,8 +546,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                         .max(start_address),
                     end_address,
                 )
-                .traverse(&mut self.flash, |_, _| true)
-                .await?
+                .traverse(&mut self.flash, |_, _| true)?
                 .1
             }
         };
@@ -577,14 +569,14 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     ///
     /// The page state can optionally be given if it's already known.
     /// In that case the state will not be checked again.
-    pub(crate) async fn is_page_empty(
+    pub(crate) fn is_page_empty(
         &mut self,
         page_index: usize,
         page_state: Option<PageState>,
     ) -> Result<bool, Error<S::Error>> {
         let page_state = match page_state {
             Some(page_state) => page_state,
-            None => self.get_page_state(page_index).await?,
+            None => self.get_page_state(page_index)?,
         };
 
         match page_state {
@@ -599,8 +591,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                         .unwrap_or(page_data_start_address),
                     page_data_end_address,
                 )
-                .traverse(&mut self.flash, |header, _| header.erased)
-                .await?
+                .traverse(&mut self.flash, |header, _| header.erased)?
                 .0
                 .is_none())
             }
@@ -621,18 +612,15 @@ impl ItemIter {
         }
     }
 
-    pub async fn next<'d, S: NorFlash>(
+    pub fn next<'d, S: NorFlash>(
         &mut self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
     ) -> Result<Option<(Item<'d>, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
-        while let (Some(header), address) = self.header.next(flash).await? {
+        while let (Some(header), address) = self.header.next(flash)? {
             let buffer = data_buffer.take().unwrap();
-            match header
-                .read_item(flash, buffer, address, self.header.end_address)
-                .await?
-            {
+            match header.read_item(flash, buffer, address, self.header.end_address)? {
                 MaybeItem::Corrupted(_, buffer) | MaybeItem::Erased(_, buffer) => {
                     data_buffer.replace(buffer);
                 }
@@ -659,24 +647,24 @@ impl ItemHeaderIter {
     }
 
     /// Fetch next item
-    pub async fn next<S: NorFlash>(
+    pub fn next<S: NorFlash>(
         &mut self,
         flash: &mut S,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
-        self.traverse(flash, |_, _| false).await
+        self.traverse(flash, |_, _| false)
     }
 
     /// Traverse headers until the callback returns false. If the callback returns true,
     /// the element is skipped and traversal continues.
     ///
     /// If the end of the headers is reached, a `None` item header is returned.
-    pub async fn traverse<S: NorFlash>(
+    pub fn traverse<S: NorFlash>(
         &mut self,
         flash: &mut S,
         callback: impl Fn(&ItemHeader, u32) -> bool,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
         loop {
-            match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
+            match ItemHeader::read_new(flash, self.current_address, self.end_address) {
                 Ok(Some(header)) => {
                     let next_address = header.next_item_address::<S>(self.current_address);
                     if callback(&header, self.current_address) {
